@@ -1,0 +1,62 @@
+# hound as a herdr plugin. Optional: the primary install path is the
+# [[keys.command]] popup snippet printed by `hound install` (see README.md).
+#
+# Link it with `herdr plugin link <this directory>`. Pane and action commands
+# are argv arrays run without a shell, so `hound` must be on the PATH of the
+# herdr server.
+
+id = "hound"
+name = "hound"
+version = "0.1.0"
+# The version hound was developed against; earlier versions are untested.
+min_herdr_version = "0.9.3"
+description = "Search coding-agent sessions and jump to them"
+platforms = ["linux", "macos"]
+
+# One popup pane per scope: a pane's argv is fixed in the manifest, and
+# `herdr plugin pane open` passes no extra arguments to it.
+
+[[panes]]
+id = "all"
+title = "hound"
+placement = "popup"
+width = "80%"
+height = "80%"
+command = ["hound", "ui", "--scope", "all"]
+
+[[panes]]
+id = "active"
+title = "hound: live agents"
+placement = "popup"
+width = "80%"
+height = "80%"
+command = ["hound", "ui", "--scope", "active"]
+
+[[panes]]
+id = "old"
+title = "hound: closed sessions"
+placement = "popup"
+width = "80%"
+height = "80%"
+command = ["hound", "ui", "--scope", "old"]
+
+# Actions, bindable with [[keys.command]] type = "plugin_action" and
+# command = "hound.search-all" (etc.). Each opens the matching popup pane.
+
+[[actions]]
+id = "search-all"
+title = "Search all sessions"
+contexts = ["global"]
+command = ["sh", "-c", "exec \"$HERDR_BIN_PATH\" plugin pane open --plugin hound --entrypoint all"]
+
+[[actions]]
+id = "search-active"
+title = "Search live agents"
+contexts = ["global"]
+command = ["sh", "-c", "exec \"$HERDR_BIN_PATH\" plugin pane open --plugin hound --entrypoint active"]
+
+[[actions]]
+id = "search-old"
+title = "Search closed sessions"
+contexts = ["global"]
+command = ["sh", "-c", "exec \"$HERDR_BIN_PATH\" plugin pane open --plugin hound --entrypoint old"]

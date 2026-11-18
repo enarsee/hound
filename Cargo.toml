@@ -1,0 +1,23 @@
+[workspace]
+resolver = "3"
+members = ["crates/hound-core", "crates/hound"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+
+[workspace.dependencies]
+hound-core = { path = "crates/hound-core" }
+anyhow = "1.0.104"
+serde = { version = "1.0.229", features = ["derive"] }
+toml = "1.2.1"
+tempfile = "3.27.0"
+serde_json = "1.0.154"
+chrono = { version = "0.4.45", default-features = false, features = ["std"] }
+tantivy = "0.27.0"
+ratatui = { version = "0.30.2", default-features = false, features = ["crossterm_0_29"] }
+crossterm = "0.29.0"
+unicode-segmentation = "1.13.3"
+clap = { version = "4.6.8", features = ["derive"] }
+httparse = "1.10.1"
+ureq = { version = "3.5.2", default-features = false, features = ["rustls", "json"] }

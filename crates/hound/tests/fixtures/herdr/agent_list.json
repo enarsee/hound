@@ -1,0 +1,76 @@
+{
+  "id": "cli:agent:list",
+  "result": {
+    "agents": [
+      {
+        "agent": "claude",
+        "agent_session": {
+          "agent": "claude",
+          "kind": "id",
+          "source": "herdr:claude",
+          "value": "0a1b2c3d-1111-4aaa-8bbb-000000000001"
+        },
+        "agent_status": "idle",
+        "completion_seq": 40,
+        "cwd": "/home/dev/alpha",
+        "focused": false,
+        "foreground_cwd": "/home/dev/alpha",
+        "interactive_ready": true,
+        "name": "refactor",
+        "pane_id": "w1:p1",
+        "revision": 4,
+        "state_change_seq": 40,
+        "tab_id": "w1:t1",
+        "terminal_id": "term_aaaaaaaaaaaa01",
+        "terminal_title": "✳ Refactor the parser",
+        "terminal_title_stripped": "Refactor the parser",
+        "workspace_id": "w1"
+      },
+      {
+        "agent": "claude",
+        "agent_session": {
+          "agent": "claude",
+          "kind": "id",
+          "source": "herdr:claude",
+          "value": "0a1b2c3d-3333-4aaa-8bbb-000000000003"
+        },
+        "agent_status": "done",
+        "completion_seq": 52,
+        "cwd": "/home/dev/alpha",
+        "focused": false,
+        "foreground_cwd": "/home/dev/alpha",
+        "pane_id": "w1:p3",
+        "revision": 3,
+        "state_change_seq": 52,
+        "tab_id": "w1:t2",
+        "terminal_id": "term_aaaaaaaaaaaa03",
+        "terminal_title": "✳ Review open pull request",
+        "terminal_title_stripped": "Review open pull request",
+        "workspace_id": "w1"
+      },
+      {
+        "agent": "claude",
+        "agent_session": {
+          "agent": "claude",
+          "kind": "id",
+          "source": "herdr:claude",
+          "value": "0a1b2c3d-4444-4aaa-8bbb-000000000004"
+        },
+        "agent_status": "working",
+        "completion_seq": 60,
+        "cwd": "/home/dev/beta",
+        "focused": true,
+        "foreground_cwd": "/home/dev/beta",
+        "pane_id": "w2:p1",
+        "revision": 2,
+        "state_change_seq": 61,
+        "tab_id": "w2:t1",
+        "terminal_id": "term_aaaaaaaaaaaa04",
+        "terminal_title": "✳ Draft release notes",
+        "terminal_title_stripped": "Draft release notes",
+        "workspace_id": "w2"
+      }
+    ],
+    "type": "agent_list"
+  }
+}
