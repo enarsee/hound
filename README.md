@@ -5,6 +5,57 @@ from a popup, then jump to the result: it focuses the pane if the session is
 still running, or resumes it if it is closed. It runs as a popup inside
 [herdr](https://herdr.dev), or standalone in any terminal.
 
+```text
+┌ hound ─  Active  Old [All] ───────────────────── subagents: on ─ 44 sessions ┐
+│ > signal                                                                     │
+├──────────────────────────────────────────────────────────────────────────────┤
+│ ● claude  Depot alerts                                          Billing › t8 │
+│     …send to the Ops Alerts Signal group…                                    │
+│ ○ claude  nginx setup                                          3d  tools-dev │
+│     [subagent] nginx config                                                  │
+│ ○ pi      scraper retries                                      2w  ledgerapp │
+└─ ⏎ open  tab scope  ^s subagents  esc close ─────────────────────────────────┘
+```
+
+`●` is a session running in a live pane, `○` a closed one. The second line of a
+row is the text that matched.
+
+## Quick start
+
+```bash
+git clone https://github.com/enarsee/hound && cd hound
+cargo build --release                 # needs a recent Rust toolchain
+
+./target/release/hound ui             # try it right away, in any terminal
+```
+
+Type to search, Enter to open, Esc to close. Outside herdr, Enter resumes the
+session in the terminal you are in.
+
+To get the popup on a key inside herdr:
+
+```bash
+./target/release/hound install        # prints three key bindings; changes nothing
+```
+
+Paste what it prints into `~/.config/herdr/config.toml`, then:
+
+```bash
+herdr server reload-config
+```
+
+| Key              | Opens                     |
+|------------------|---------------------------|
+| `prefix+space`   | all sessions              |
+| `prefix+a`       | live agents               |
+| `prefix+shift+o` | closed sessions           |
+
+The first open indexes your sessions in the background; after that the index
+is kept up to date each time the popup opens. Nothing is sent anywhere: hound
+reads local files and talks only to herdr, unless you turn on the optional
+features described under [Enrichment](#enrichment) and
+[Advanced: several machines](#advanced-several-machines).
+
 Supported agents:
 
 | Agent       | Sessions read from          | Status          |
@@ -384,76 +435,54 @@ is set, so `cargo test -- --include-ignored` alone stays off real data:
 HOUND_LIVE_TESTS=1 cargo test --workspace -- --ignored --nocapture
 ```
 
-## Verified on a real setup
+## Status
 
-On 2026-11-17, on a real setup (a macOS client attached to a Linux server
-running herdr 0.9.3):
+hound is young. The core — indexing, search, the popup, focusing and resuming
+on one machine — is in daily use. The parts below are marked by how much real
+use they have had.
 
-- A popup bound on the server opens from the attached client.
-- herdr is detected inside the popup.
-- Enter focuses a live agent.
+**Tried on a real setup** (a macOS herdr client attached to a Linux herdr
+0.9.3 server, with hound running on the server):
+
+- The key bindings open the popup from the attached client, each in its scope.
+- herdr is detected inside the popup; live agents show with their workspace
+  and tab.
+- Enter focuses a live agent, across workspaces.
 - Enter resumes a closed session in a new tab.
-- `herdr --machine <label> agent focus` moves the client's view.
+- `herdr --machine <label> agent focus` moves the client's view to the pane.
 
-## Not yet verified
+**Covered by tests only, not yet tried by hand:**
 
-The herdr integration is built from herdr's documentation and recorded command
-output, and is unit-tested with fixtures. Apart from the five checks above, it
-has not been exercised by hand. Outside herdr, only this was tried: opening
-`hound ui`, typing a query, and closing it with Esc. Everything below is
-unverified.
-
-Check these first, in this order:
-
-1. Focusing a pane by ID, and whether focus persists after the popup closes.
-2. The response shapes of `tab create` and `agent start`.
-3. Whether resuming keeps the session ID (and file).
-4. Whether the detached `hound enrich` survives the popup closing.
-
-The full list:
-
-- The hotkeys opening the popup, each in its own scope, and first paint and
-  typing feeling instant.
-- Tab / Shift+Tab cycling scopes and Ctrl+S toggling subagent matches in a real
-  terminal (they are covered by unit tests of the popup's state only).
-- Resuming a closed Claude session and a closed pi session.
-- Opening a session that is already live focuses it instead of starting a
-  second copy.
-- Enter in a plain terminal outside herdr replacing hound with
-  `claude --resume …` / `pi --session …` in the session's directory.
-
-- Focusing a pane by ID over the herdr socket (`pane.focus`), including across
-  workspaces.
-- Resuming a closed session into a new tab in the right workspace.
-- The output formats of herdr's focus, `agent start` and `pane read`
-  commands, as hound parses them.
-- Which `HERDR_*` variables a `[[keys.command]]` popup actually receives.
-  herdr's documentation lists `HERDR_SOCKET_PATH`, `HERDR_BIN_PATH` and
-  `HERDR_ACTIVE_*` for custom commands (not `HERDR_ENV`), and
-  `HERDR_ENV=1`, `HERDR_SOCKET_PATH` and `HERDR_BIN_PATH` for plugin panes;
-  hound's detection accepts either `HERDR_ENV=1` or `HERDR_SOCKET_PATH`.
-- The plugin path: an action opening a popup pane via
-  `herdr plugin pane open`.
-- The response shape of `tab create` (hound reads the new tab's root pane
-  from it).
-- Whether the detached `hound enrich` started by the popup survives the popup
-  closing.
-- Whether focus stays on the focused pane after the popup closes.
-- What `focused` means in the pane list while a popup is up: resuming falls
-  back to the workspace of the focused pane when no pane shares the session's
-  directory.
+- Everything under [Advanced: several machines](#advanced-several-machines):
+  `hound serve` on a real network, the merged list, and opening a remote
+  session. In particular `tab create` and `agent start` through
+  `herdr --machine`, whether the client's view follows after a remote resume,
+  and whether the list commands through `--machine` return the same shapes as
+  locally.
+- Building and running on macOS. hound has only been compiled on Linux.
+- The herdr plugin manifest (`herdr-plugin.toml`): an action opening a popup
+  pane through `herdr plugin pane open`.
+- Running outside herdr: opening, typing and closing were tried; Enter handing
+  the terminal to `claude --resume …` / `pi --session …` was not.
 - Whether `claude --resume <id>` and `pi --session <id>` keep the same session
   ID and file, or start a new one (which hound would index as a new session).
+- Whether the enrichment run started by the popup survives the popup closing.
+- The service coming back by itself after the machine reboots.
+- opencode is not supported (see the top of this file).
 
-Several machines:
+Design notes: [docs/DESIGN.md](docs/DESIGN.md) and
+[docs/REMOTE-DESIGN.md](docs/REMOTE-DESIGN.md).
 
-- `tab create` and `agent start` run through `herdr --machine <label>` (the
-  resume verified above was local, not through `--machine`).
-- Whether the four list commands hound runs through `--machine` (`workspace
-  list`, `tab list`, `pane list`, `agent list`) return the same shapes as
-  locally.
-- Whether plain `herdr pane list` and `agent list` on the client list only
-  the client's own panes (only `workspace list` was checked).
-- Whether the client's view follows the new agent after a remote resume.
-- Whether `workspace focus` and `tab focus` through `--machine` move the view.
-- Building and running hound on macOS (it has never been compiled there).
+## License
+
+Licensed under either of
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
+- MIT license ([LICENSE-MIT](LICENSE-MIT))
+
+at your option.
+
+Unless you explicitly state otherwise, any contribution intentionally
+submitted for inclusion in this work by you, as defined in the Apache-2.0
+license, shall be dual licensed as above, without any additional terms or
+conditions.

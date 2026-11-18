@@ -399,7 +399,7 @@ Where the build differs from the design above, and what is still open.
   (the session is retried later); a small local model takes a few seconds per
   session.
 - **Live state** is snapshotted once when the popup opens, not on a timer.
-- **Not yet verified against a live herdr session:** see the README's list.
+- **Not yet verified against a live herdr session:** see the README's Status section.
   Nothing that creates tabs, focuses panes or starts agents has been run for
   real.
 - **Deferred:** phase C (`hound serve`), release binaries, preview pane,
