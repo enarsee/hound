@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use hound_core::model::SessionKey;
 use hound_core::open::OpenOutcome;
 use hound_core::search::{Entry, Hit, Scope, merge_hits};
@@ -20,6 +20,94 @@ pub enum Effect {
         confirmed: bool,
     },
     Close,
+}
+
+/// One input for the popup, from a batch of terminal events.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Input {
+    Key(KeyEvent),
+    /// Text pasted into the terminal: a bracketed paste, or a burst of key
+    /// presses (see [`split_paste_bursts`]).
+    Pasted(String),
+    /// Any other event (resize, focus, mouse): nothing for the popup to do
+    /// beyond redrawing.
+    Other(Event),
+}
+
+/// Key presses in a burst that make it a paste.
+const BURST_MIN: usize = 3;
+
+/// A key press of a character typed without Ctrl or Alt (Shift is fine).
+fn printable(key: &KeyEvent) -> Option<char> {
+    match key.code {
+        KeyCode::Char(c)
+            if key.kind == KeyEventKind::Press
+                && !key
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+        {
+            Some(c)
+        }
+        _ => None,
+    }
+}
+
+/// A key release or repeat: inside a burst it neither counts nor ends it.
+fn not_a_press(event: &Event) -> bool {
+    matches!(event, Event::Key(key) if key.kind != KeyEventKind::Press)
+}
+
+/// Interprets a batch of terminal events read without waiting, in order.
+/// Some terminals (crossterm on Windows) report pasted text as separate key
+/// presses, a line break as Enter. So a run of at least three printable key
+/// presses is taken as pasted: the run and every printable character and
+/// Enter after it, up to the first other key or event, become one
+/// [`Input::Pasted`], each Enter a space between the characters around it
+/// (Enters at its end are dropped). Key releases and repeats within such a
+/// run are dropped; elsewhere every event passes through, a bracketed paste
+/// as [`Input::Pasted`] with its text unchanged.
+pub fn split_paste_bursts(batch: &[Event]) -> Vec<Input> {
+    let mut inputs = Vec::new();
+    let mut i = 0;
+    while i < batch.len() {
+        let is_printable = |e: &Event| matches!(e, Event::Key(key) if printable(key).is_some());
+        let presses = batch[i..]
+            .iter()
+            .filter(|e| !not_a_press(e))
+            .take_while(|e| is_printable(e))
+            .count();
+        if is_printable(&batch[i]) && presses >= BURST_MIN {
+            let mut text = String::new();
+            let mut enters = 0;
+            while let Some(event) = batch.get(i) {
+                match event {
+                    Event::Key(key) if key.kind == KeyEventKind::Press => {
+                        if let Some(c) = printable(key) {
+                            text.extend(std::iter::repeat_n(' ', enters));
+                            enters = 0;
+                            text.push(c);
+                        } else if key.code == KeyCode::Enter {
+                            enters += 1;
+                        } else {
+                            break;
+                        }
+                    }
+                    event if not_a_press(event) => {}
+                    _ => break,
+                }
+                i += 1;
+            }
+            inputs.push(Input::Pasted(text));
+            continue;
+        }
+        inputs.push(match &batch[i] {
+            Event::Key(key) => Input::Key(*key),
+            Event::Paste(text) => Input::Pasted(text.clone()),
+            other => Input::Other(other.clone()),
+        });
+        i += 1;
+    }
+    inputs
 }
 
 /// Why the popup ends after an open.
@@ -212,6 +300,15 @@ impl App {
             }
             KeyCode::Esc => self.close(),
             _ => Effect::None,
+        }
+    }
+
+    /// One input from [`split_paste_bursts`].
+    pub fn on_input(&mut self, input: &Input) -> Effect {
+        match input {
+            Input::Key(key) => self.on_key(*key),
+            Input::Pasted(text) => self.on_paste(text),
+            Input::Other(_) => Effect::None,
         }
     }
 

@@ -1,11 +1,11 @@
-use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use hound::hound_core::host::LivePane;
 use hound::hound_core::index::SessionDoc;
 use hound::hound_core::model::{Harness, SessionKey};
 use hound::hound_core::open::OpenOutcome;
 use hound::hound_core::search::{Entry, Hit, Scope, Tier, build_entries};
 use hound::ui::render::{display_width, relative_age, row, row_lines, truncate};
-use hound::ui::{App, Effect, Exit, draw};
+use hound::ui::{App, Effect, Exit, Input, draw, split_paste_bursts};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
@@ -1482,4 +1482,251 @@ fn format_controls_do_not_reach_the_screen() {
         .map(|c| format!("U+{:04X}", *c as u32))
         .collect();
     assert!(found.is_empty(), "{found:?} in {out}");
+}
+
+// Pasted input as a burst of key presses.
+
+fn ch(c: char) -> Event {
+    Event::Key(k(KeyCode::Char(c)))
+}
+
+fn enter() -> Event {
+    Event::Key(k(KeyCode::Enter))
+}
+
+fn released(event: &Event) -> Event {
+    let Event::Key(mut key) = event.clone() else {
+        panic!("not a key: {event:?}");
+    };
+    key.kind = KeyEventKind::Release;
+    Event::Key(key)
+}
+
+fn key_input(event: &Event) -> Input {
+    let Event::Key(key) = event else {
+        panic!("not a key: {event:?}");
+    };
+    Input::Key(*key)
+}
+
+#[test]
+fn burst_with_enter_is_pasted() {
+    let batch = [ch('a'), ch('b'), ch('c'), enter(), ch('d')];
+    assert_eq!(
+        split_paste_bursts(&batch),
+        vec![Input::Pasted("abc d".to_string())]
+    );
+}
+
+#[test]
+fn fast_typing_is_not_a_paste() {
+    let batch = [ch('x'), enter()];
+    assert_eq!(
+        split_paste_bursts(&batch),
+        batch.iter().map(key_input).collect::<Vec<_>>()
+    );
+    let batch = [ch('x'), ch('y'), enter()];
+    assert_eq!(
+        split_paste_bursts(&batch),
+        batch.iter().map(key_input).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn single_enter_is_a_key() {
+    assert_eq!(
+        split_paste_bursts(&[enter()]),
+        vec![Input::Key(k(KeyCode::Enter))]
+    );
+}
+
+#[test]
+fn ctrl_keys_end_a_burst() {
+    let batch = [ch('a'), ch('b'), ch('c'), Event::Key(ctrl('u'))];
+    assert_eq!(
+        split_paste_bursts(&batch),
+        vec![Input::Pasted("abc".to_string()), Input::Key(ctrl('u'))]
+    );
+}
+
+#[test]
+fn non_key_events_pass_through() {
+    let batch = [Event::Resize(80, 24), ch('a')];
+    assert_eq!(
+        split_paste_bursts(&batch),
+        vec![
+            Input::Other(Event::Resize(80, 24)),
+            Input::Key(k(KeyCode::Char('a')))
+        ]
+    );
+}
+
+#[test]
+fn pasted_burst_reaches_on_paste() {
+    let mut app = app_with_hits(3);
+    let effects: Vec<Effect> = split_paste_bursts(&[ch('a'), ch('b'), ch('c'), enter()])
+        .iter()
+        .map(|input| app.on_input(input))
+        .collect();
+    assert_eq!(app.query, "abc");
+    assert_eq!(effects, vec![Effect::Requery]);
+}
+
+#[test]
+fn key_releases_neither_break_nor_count_in_a_burst() {
+    // Windows reports a release after every press.
+    let presses = [ch('a'), ch('b'), ch('c'), enter(), ch('d')];
+    let batch: Vec<Event> = presses
+        .iter()
+        .flat_map(|e| [e.clone(), released(e)])
+        .collect();
+    assert_eq!(
+        split_paste_bursts(&batch),
+        vec![Input::Pasted("abc d".to_string())]
+    );
+    // Releases do not make two presses a burst.
+    let batch = [
+        ch('x'),
+        released(&ch('x')),
+        ch('y'),
+        released(&ch('y')),
+        enter(),
+    ];
+    assert_eq!(
+        split_paste_bursts(&batch),
+        batch.iter().map(key_input).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn repeats_are_not_presses_in_a_burst() {
+    let mut repeat = k(KeyCode::Char('z'));
+    repeat.kind = KeyEventKind::Repeat;
+    let batch = [ch('a'), Event::Key(repeat), ch('b'), enter()];
+    assert_eq!(
+        split_paste_bursts(&batch),
+        batch.iter().map(key_input).collect::<Vec<_>>()
+    );
+    let batch = [ch('a'), ch('b'), Event::Key(repeat), ch('c'), enter()];
+    assert_eq!(
+        split_paste_bursts(&batch),
+        vec![Input::Pasted("abc".to_string())]
+    );
+}
+
+#[test]
+fn shifted_and_unicode_chars_join_a_burst() {
+    let upper = Event::Key(KeyEvent::new(KeyCode::Char('A'), KeyModifiers::SHIFT));
+    let batch = [upper, ch('é'), ch('-'), ch(' '), ch('漢')];
+    assert_eq!(
+        split_paste_bursts(&batch),
+        vec![Input::Pasted("Aé- 漢".to_string())]
+    );
+}
+
+#[test]
+fn alt_chars_and_other_keys_end_a_burst_in_order() {
+    let alt = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::ALT);
+    let batch = [
+        ch('a'),
+        ch('b'),
+        ch('c'),
+        enter(),
+        enter(),
+        Event::Key(alt),
+        enter(),
+        ch('d'),
+        ch('e'),
+        ch('f'),
+        ch('g'),
+        Event::Key(k(KeyCode::Down)),
+        ch('h'),
+        Event::Resize(1, 1),
+    ];
+    assert_eq!(
+        split_paste_bursts(&batch),
+        vec![
+            Input::Pasted("abc".to_string()),
+            Input::Key(alt),
+            Input::Key(k(KeyCode::Enter)),
+            Input::Pasted("defg".to_string()),
+            Input::Key(k(KeyCode::Down)),
+            Input::Key(k(KeyCode::Char('h'))),
+            Input::Other(Event::Resize(1, 1)),
+        ]
+    );
+}
+
+#[test]
+fn enters_between_lines_become_spaces() {
+    let batch = [
+        ch('a'),
+        ch('b'),
+        ch('c'),
+        enter(),
+        enter(),
+        ch('d'),
+        enter(),
+    ];
+    assert_eq!(
+        split_paste_bursts(&batch),
+        vec![Input::Pasted("abc  d".to_string())]
+    );
+}
+
+#[test]
+fn a_non_key_event_ends_a_burst() {
+    let batch = [
+        ch('a'),
+        ch('b'),
+        ch('c'),
+        Event::FocusLost,
+        ch('d'),
+        enter(),
+    ];
+    assert_eq!(
+        split_paste_bursts(&batch),
+        vec![
+            Input::Pasted("abc".to_string()),
+            Input::Other(Event::FocusLost),
+            Input::Key(k(KeyCode::Char('d'))),
+            Input::Key(k(KeyCode::Enter)),
+        ]
+    );
+}
+
+#[test]
+fn bracketed_paste_is_pasted_unchanged() {
+    let batch = [Event::Paste("a\nb".to_string()), enter()];
+    assert_eq!(
+        split_paste_bursts(&batch),
+        vec![
+            Input::Pasted("a\nb".to_string()),
+            Input::Key(k(KeyCode::Enter))
+        ]
+    );
+}
+
+#[test]
+fn inputs_reach_the_app_in_order() {
+    let mut app = app_with_hits(3);
+    app.on_key(k(KeyCode::Down));
+    let inputs = [
+        Input::Other(Event::FocusGained),
+        Input::Pasted("ab".to_string()),
+        Input::Key(k(KeyCode::Enter)),
+    ];
+    let effects: Vec<Effect> = inputs.iter().map(|i| app.on_input(i)).collect();
+    assert_eq!(
+        effects,
+        vec![
+            Effect::None,
+            Effect::Requery,
+            Effect::Open {
+                hit: 1,
+                confirmed: false
+            }
+        ]
+    );
+    assert_eq!(app.query, "ab");
 }

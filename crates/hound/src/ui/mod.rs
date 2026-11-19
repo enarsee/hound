@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex, Once};
 use std::thread::{self, ThreadId};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use crossterm::event::{self, DisableBracketedPaste, EnableBracketedPaste, Event};
+use crossterm::event::{self, DisableBracketedPaste, EnableBracketedPaste};
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::{cursor, execute};
 use hound_core::adapters::Adapter;
@@ -31,7 +31,7 @@ use hound_core::search::{Scope, build_entries, search};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
-pub use app::{AfterRefresh, App, Effect, Exit, after_refresh};
+pub use app::{AfterRefresh, App, Effect, Exit, Input, after_refresh, split_paste_bursts};
 pub use render::draw;
 
 use crate::herdr::CliHerdr;
@@ -196,16 +196,18 @@ impl Ui {
                 drawn_at = Instant::now();
             }
 
+            // The first event waits up to a tick; the rest of the batch is
+            // what is already waiting, read as a whole so a paste that
+            // arrives as key presses can be recognised.
+            let mut batch = Vec::new();
             let mut wait = TICK;
             while event::poll(wait)? {
                 wait = Duration::ZERO;
+                batch.push(event::read()?);
+            }
+            for input in split_paste_bursts(&batch) {
                 dirty = true;
-                let effect = match event::read()? {
-                    Event::Key(key) => self.app.on_key(key),
-                    Event::Paste(text) => self.app.on_paste(&text),
-                    _ => continue,
-                };
-                match effect {
+                match self.app.on_input(&input) {
                     Effect::None => {}
                     Effect::Requery => self.requery(Reason::User),
                     Effect::Close => return Ok(None),
@@ -521,7 +523,10 @@ impl TerminalGuard {
         set_ui_thread(Some(thread::current().id()));
         // From here on, a failure must still restore the terminal.
         let terminal = (|| -> anyhow::Result<_> {
-            execute!(io::stdout(), EnterAlternateScreen, EnableBracketedPaste)?;
+            execute!(io::stdout(), EnterAlternateScreen)?;
+            // Without bracketed paste (the legacy Windows console), pastes
+            // arrive as key presses, handled by `split_paste_bursts`.
+            let _ = execute!(io::stdout(), EnableBracketedPaste);
             Ok(Terminal::new(CrosstermBackend::new(io::stdout()))?)
         })();
         match terminal {
