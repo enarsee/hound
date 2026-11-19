@@ -1,13 +1,15 @@
 use hound::herdr::{
-    MachineHerdr, SocketConnection, check_output, create_tab_args, detect_herdr,
+    MachineHerdr, SocketConnection, check_output, create_tab_args, detect_herdr, exchange,
     fallback_focus_args, focus_commands, machine_args, machine_create_tab_args,
     machine_focus_commands, machine_start_agent_commands, one_line, pane_focus_request,
     parse_read_output, parse_snapshot, parse_tab_created, read_args, request_line,
-    snapshot_commands, start_agent_args, validate_machine_label,
+    snapshot_commands, start_agent_args, validate_machine_label, with_time_limit,
 };
 use hound_core::host::LivePane;
 use std::ffi::OsStr;
+use std::io::{Cursor, Read, Write};
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 const WORKSPACES: &str = include_str!("fixtures/herdr/workspace_list.json");
 const TABS: &str = include_str!("fixtures/herdr/tab_list.json");
@@ -164,6 +166,7 @@ fn fallback_cannot_focus_shell_pane() {
     assert!(err.to_string().contains("w1:p2"), "{err}");
 }
 
+#[cfg(unix)]
 /// A one-shot fake server on a Unix socket: checks the request line, sends `response`.
 fn fake_server(
     response: &'static str,
@@ -187,6 +190,7 @@ fn fake_server(
 }
 
 #[test]
+#[cfg(unix)]
 fn socket_call_returns_result() {
     let (_dir, path, server) =
         fake_server("{\"id\":\"hound:pane.focus\",\"result\":{\"type\":\"ok\"}}\n");
@@ -197,6 +201,7 @@ fn socket_call_returns_result() {
 }
 
 #[test]
+#[cfg(unix)]
 fn socket_error_response_is_an_error() {
     let (_dir, path, _server) = fake_server(
         "{\"id\":\"hound:pane.focus\",\"error\":{\"code\":\"pane_not_found\",\"message\":\"no pane w9:p9\"}}\n",
@@ -207,6 +212,7 @@ fn socket_error_response_is_an_error() {
 }
 
 #[test]
+#[cfg(unix)]
 fn socket_mismatched_id_is_an_error() {
     let (_dir, path, _server) = fake_server("{\"id\":\"other\",\"result\":{\"type\":\"ok\"}}\n");
     let mut conn = SocketConnection::connect(&path).unwrap();
@@ -214,6 +220,7 @@ fn socket_mismatched_id_is_an_error() {
 }
 
 #[test]
+#[cfg(unix)]
 fn socket_closed_without_response_is_an_error() {
     let (_dir, path, _server) = fake_server("");
     let mut conn = SocketConnection::connect(&path).unwrap();
@@ -221,6 +228,7 @@ fn socket_closed_without_response_is_an_error() {
 }
 
 #[test]
+#[cfg(unix)]
 fn missing_socket_does_not_connect() {
     let dir = tempfile::tempdir().unwrap();
     assert!(SocketConnection::connect(&dir.path().join("absent.sock")).is_err());
@@ -248,12 +256,102 @@ fn null_error_is_no_error() {
 }
 
 #[test]
+#[cfg(unix)]
 fn socket_null_error_returns_result() {
     let (_dir, path, _server) =
         fake_server("{\"id\":\"hound:pane.focus\",\"error\":null,\"result\":{\"type\":\"ok\"}}\n");
     let mut conn = SocketConnection::connect(&path).unwrap();
     let result = conn.call(&pane_focus_request("w1:p2")).unwrap();
     assert_eq!(result, serde_json::json!({"type": "ok"}));
+}
+
+#[test]
+fn time_limit_returns_the_result() {
+    let value = with_time_limit(Duration::from_secs(5), || Ok(7)).unwrap();
+    assert_eq!(value, 7);
+}
+
+#[test]
+fn time_limit_gives_up_on_a_hung_call() {
+    let started = Instant::now();
+    let err = with_time_limit(Duration::from_millis(200), || {
+        std::thread::sleep(Duration::from_secs(5));
+        Ok(())
+    })
+    .unwrap_err();
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "{:?}",
+        started.elapsed()
+    );
+    assert!(format!("{err:#}").contains("did not answer"), "{err:#}");
+}
+
+#[test]
+fn time_limit_passes_errors_through() {
+    let err = with_time_limit(Duration::from_secs(5), || -> anyhow::Result<()> {
+        anyhow::bail!("boom")
+    })
+    .unwrap_err();
+    assert!(format!("{err:#}").contains("boom"), "{err:#}");
+}
+
+/// An in-memory stream: reads come from `response`, writes land in `request`.
+struct Duplex {
+    response: Cursor<Vec<u8>>,
+    request: Vec<u8>,
+}
+
+impl Duplex {
+    fn answering(response: &str) -> Duplex {
+        Duplex {
+            response: Cursor::new(response.as_bytes().to_vec()),
+            request: Vec::new(),
+        }
+    }
+}
+
+impl Read for Duplex {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.response.read(buf)
+    }
+}
+
+impl Write for Duplex {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.request.write(buf)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn request_response_logic_is_stream_generic() {
+    let request = pane_focus_request("w1:p2");
+
+    let mut ok = Duplex::answering("{\"id\":\"hound:pane.focus\",\"result\":{\"type\":\"ok\"}}\n");
+    let result = exchange(&mut ok, &request).unwrap();
+    assert_eq!(result, serde_json::json!({"type": "ok"}));
+    assert_eq!(String::from_utf8(ok.request).unwrap(), request);
+
+    let mut null_error = Duplex::answering(
+        "{\"id\":\"hound:pane.focus\",\"error\":null,\"result\":{\"type\":\"ok\"}}\n",
+    );
+    let result = exchange(&mut null_error, &request).unwrap();
+    assert_eq!(result, serde_json::json!({"type": "ok"}));
+
+    let mut mismatched = Duplex::answering("{\"id\":\"other\",\"result\":{\"type\":\"ok\"}}\n");
+    assert!(exchange(&mut mismatched, &request).is_err());
+
+    let mut error = Duplex::answering(
+        "{\"id\":\"hound:pane.focus\",\"error\":{\"code\":\"pane_not_found\",\"message\":\"no pane w9:p9\"}}\n",
+    );
+    let err = exchange(&mut error, &pane_focus_request("w9:p9")).unwrap_err();
+    assert!(format!("{err:#}").contains("no pane w9:p9"), "{err:#}");
+
+    let mut empty = Duplex::answering("");
+    assert!(exchange(&mut empty, &request).is_err());
 }
 
 /// Read-only transport check against the live herdr session: `workspace.list` over the

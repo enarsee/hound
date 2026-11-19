@@ -22,8 +22,11 @@ clap.workspace = true
 libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
-# SetConsoleCtrlHandler, so the resumed agent alone receives Ctrl+C.
-windows-sys = { version = "0.61", features = ["Win32_System_Console"] }
+# SetConsoleCtrlHandler, so the resumed agent alone receives Ctrl+C; process creation flags,
+# so the background `hound enrich` is detached.
+windows-sys = { version = "0.61", features = ["Win32_System_Console", "Win32_System_Threading"] }
+# herdr's named pipe, connected the way herdr itself connects.
+interprocess = "2.4"
 
 [dev-dependencies]
 tempfile.workspace = true

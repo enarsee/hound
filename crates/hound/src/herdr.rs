@@ -23,7 +23,7 @@ use crate::program::resolve_on_this_machine;
 
 mod socket;
 
-pub use socket::{SocketConnection, request_line};
+pub use socket::{SocketConnection, exchange, request_line, with_time_limit};
 
 /// Joins the JSON output of `herdr workspace list`, `herdr tab list`, `herdr pane list` and
 /// `herdr agent list` (all workspaces) into one `LivePane` per pane, in pane-list order.
