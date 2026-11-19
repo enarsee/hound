@@ -657,12 +657,12 @@ fn committed_batch_is_visible_to_another_handle() {
     assert_eq!(seen, vec![(20, 20), (25, 25)]);
 }
 
-/// A rebuild whose old index cannot be deleted (here: a read-only directory;
-/// on Windows: files another process has open) fails with a clear message and
-/// leaves no `state.json`, so the next open rebuilds.
+/// A rebuild whose old index cannot be deleted (a read-only directory) fails
+/// naming the directory, as before, and leaves no `state.json`, so the next
+/// open rebuilds.
 #[cfg(unix)]
 #[test]
-fn rebuild_with_undeletable_index_reports_index_in_use() {
+fn rebuild_with_undeletable_index_fails_and_next_open_rebuilds() {
     use std::os::unix::fs::PermissionsExt;
 
     let f = Fixture::new();
@@ -679,11 +679,7 @@ fn rebuild_with_undeletable_index_reports_index_in_use() {
     fs::set_permissions(&index_dir, fs::Permissions::from_mode(0o755)).unwrap();
 
     let err = format!("{:#}", result.err().expect("open should fail"));
-    assert!(
-        err.contains("another hound process is using the index"),
-        "{err}"
-    );
-    assert!(err.contains("close it and retry"), "{err}");
+    assert!(err.contains("removing"), "{err}");
     assert!(!f.state.join("state.json").exists());
 
     let ix = f.open();

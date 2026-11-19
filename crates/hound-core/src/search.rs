@@ -414,7 +414,8 @@ fn rank(a: &Entry, a_tier: Tier, b: &Entry, b_tier: Tier) -> Ordering {
 /// a root (`/`, `C:\`).
 ///
 /// A Windows-style `home` (a drive letter and `:`, or a leading `\\`) matches
-/// ASCII-case-insensitively with `/` and `\` as the same separator. The style
+/// ASCII-case-insensitively (non-ASCII letters must match exactly) with `/`
+/// and `\` as the same separator. The style
 /// is read from `home`, not from the running platform, since cwds may come
 /// from a remote machine.
 fn strip_home<'a>(cwd: &'a str, home: Option<&str>) -> &'a str {

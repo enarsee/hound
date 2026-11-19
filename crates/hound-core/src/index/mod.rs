@@ -32,6 +32,7 @@ use tantivy::{
 
 use crate::enrich::Enrichment;
 use crate::model::{Harness, SessionKey};
+use crate::platform::Platform;
 
 pub use query::{TermHit, TermMode, TextSearch};
 pub use refresh::RefreshStats;
@@ -316,12 +317,14 @@ impl Index {
     /// another process has its files open), this fails saying so, leaving no
     /// `state.json`, so the next open rebuilds.
     pub fn open(dir: &Path) -> anyhow::Result<Index> {
-        Index::open_with(dir, &|path| fs::remove_dir_all(path))
+        Index::open_with(dir, Platform::current(), &|path| fs::remove_dir_all(path))
     }
 
-    /// [`Index::open`] deleting the old index directory with `remove_dir`.
+    /// [`Index::open`] on `platform`, deleting the old index directory with
+    /// `remove_dir`.
     fn open_with(
         dir: &Path,
+        platform: Platform,
         remove_dir: &dyn Fn(&Path) -> io::Result<()>,
     ) -> anyhow::Result<Index> {
         fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
@@ -338,7 +341,7 @@ impl Index {
                 if let Some(opened) = open_existing(dir, &schema)? {
                     break opened;
                 }
-                break recreate(dir, &index_dir, schema, remove_dir)?;
+                break recreate(dir, &index_dir, schema, platform, remove_dir)?;
             }
             anyhow::ensure!(
                 Instant::now() < deadline,
@@ -575,6 +578,7 @@ fn recreate(
     dir: &Path,
     index_dir: &Path,
     schema: Schema,
+    platform: Platform,
     remove_dir: &dyn Fn(&Path) -> io::Result<()>,
 ) -> anyhow::Result<(tantivy::Index, IndexReader)> {
     // Without a state file, concurrent opens wait for the lock instead of
@@ -584,13 +588,7 @@ fn recreate(
         _ => {}
     }
     if index_dir.exists() {
-        remove_dir(index_dir).map_err(|e| {
-            anyhow::anyhow!(
-                "cannot rebuild the index in {}: another hound process is using the index; \
-                 close it and retry ({e})",
-                index_dir.display()
-            )
-        })?;
+        remove_dir(index_dir).map_err(|e| removal_error(platform, e, index_dir))?;
     }
     fs::create_dir_all(index_dir)?;
     let opened = with_reader(tantivy::Index::create_in_dir(index_dir, schema)?)?;
@@ -602,6 +600,27 @@ fn recreate(
         },
     )?;
     Ok(opened)
+}
+
+/// The error for failing to remove the index directory `path` with `e`. On
+/// Windows, access denied, sharing violation and lock violation mean another
+/// process has the index's files open, and say so; anything else is reported
+/// as a failure removing `path`.
+fn removal_error(platform: Platform, e: io::Error, path: &Path) -> anyhow::Error {
+    /// ERROR_ACCESS_DENIED, ERROR_SHARING_VIOLATION, ERROR_LOCK_VIOLATION.
+    const IN_USE_CODES: [i32; 3] = [5, 32, 33];
+    let in_use = platform == Platform::Windows
+        && (e.kind() == io::ErrorKind::PermissionDenied
+            || e.raw_os_error().is_some_and(|c| IN_USE_CODES.contains(&c)));
+    if in_use {
+        anyhow::anyhow!(
+            "cannot rebuild the index in {}: another hound process is using the index; \
+             close it and retry ({e})",
+            path.display()
+        )
+    } else {
+        anyhow::Error::new(e).context(format!("removing {}", path.display()))
+    }
 }
 
 fn with_reader(index: tantivy::Index) -> tantivy::Result<(tantivy::Index, IndexReader)> {
@@ -663,6 +682,8 @@ fn write_state(dir: &Path, state: &State) -> anyhow::Result<()> {
 mod tests {
     use super::*;
 
+    // A unit test rather than one under `tests/`, because the injection point
+    // (`Index::open_with`) is private.
     #[test]
     fn rebuild_reports_index_in_use_when_removal_fails() {
         let dir = tempfile::tempdir().unwrap();
@@ -680,7 +701,7 @@ mod tests {
                 "file in use by another process",
             ))
         };
-        let err = match Index::open_with(dir.path(), &in_use) {
+        let err = match Index::open_with(dir.path(), Platform::Windows, &in_use) {
             Ok(_) => panic!("open succeeded although removal failed"),
             Err(e) => e.to_string(),
         };
@@ -695,5 +716,53 @@ mod tests {
         Index::open(dir.path()).unwrap();
         let state = read_state(dir.path()).unwrap().unwrap();
         assert_eq!(state.schema_version, SCHEMA_VERSION);
+    }
+
+    fn removal_text(platform: Platform, e: io::Error) -> String {
+        format!(
+            "{:#}",
+            removal_error(platform, e, Path::new("/state/index"))
+        )
+    }
+
+    const IN_USE: &str = "another hound process is using the index";
+
+    #[test]
+    fn windows_permission_denied_is_index_in_use() {
+        let text = removal_text(
+            Platform::Windows,
+            io::Error::new(io::ErrorKind::PermissionDenied, "access denied"),
+        );
+        assert!(text.contains(IN_USE), "{text}");
+        assert!(text.contains("close it and retry"), "{text}");
+        assert!(text.contains("access denied"), "{text}");
+    }
+
+    #[test]
+    fn windows_sharing_violation_is_index_in_use() {
+        for code in [5, 32, 33] {
+            let text = removal_text(Platform::Windows, io::Error::from_raw_os_error(code));
+            assert!(text.contains(IN_USE), "{code}: {text}");
+            assert!(text.contains("close it and retry"), "{code}: {text}");
+        }
+    }
+
+    #[test]
+    fn windows_other_errors_say_removing() {
+        let text = removal_text(
+            Platform::Windows,
+            io::Error::new(io::ErrorKind::NotFound, "gone"),
+        );
+        assert!(text.starts_with("removing /state/index: gone"), "{text}");
+        assert!(!text.contains(IN_USE), "{text}");
+    }
+
+    #[test]
+    fn unix_permission_denied_says_removing() {
+        let text = removal_text(
+            Platform::Unix,
+            io::Error::new(io::ErrorKind::PermissionDenied, "denied"),
+        );
+        assert_eq!(text, "removing /state/index: denied");
     }
 }
