@@ -498,7 +498,8 @@ fn printable_exe_path(path: &Path) -> PathBuf {
 }
 
 /// The text `hound install` prints for `platform`. `plugin_dir` is the
-/// directory holding `herdr-plugin.toml`, when known. On Windows herdr runs
+/// directory holding `herdr-plugin.toml`, when known (not used on Windows,
+/// where the plugin manifest is not offered). On Windows herdr runs
 /// the command through `cmd.exe`, which cannot quote a path holding `"` or
 /// `%`; such a path is an error.
 fn install_text(
@@ -538,15 +539,15 @@ fn install_text(
         out.push_str("width = \"80%\"\n");
         out.push_str("height = \"80%\"\n");
     }
+    // The plugin manifest is not designed for Windows: no plugin lines there.
+    if platform == Platform::Windows {
+        return Ok(out);
+    }
     out.push_str("\n# Optional, instead of the bindings above: register hound as a herdr plugin\n");
     out.push_str("# (see README.md; needs `hound` on the herdr server's PATH):\n");
     match plugin_dir {
         Some(dir) => {
-            let dir = dir.to_string_lossy();
-            let dir = match platform {
-                Platform::Unix => shell_quote(&dir),
-                Platform::Windows => format!("\"{dir}\""),
-            };
+            let dir = shell_quote(&dir.to_string_lossy());
             out.push_str(&format!("#   herdr plugin link {dir}\n"));
         }
         None => out.push_str(
@@ -714,17 +715,19 @@ height = "80%"
     }
 
     #[test]
-    fn windows_install_plugin_line_uses_double_quotes() {
-        let text = install_text(
-            Platform::Windows,
-            &PathBuf::from(r"C:\Tools\hound.exe"),
-            Some(&PathBuf::from(r"C:\src\my hound")),
-        )
-        .unwrap();
-        assert!(
-            text.contains("#   herdr plugin link \"C:\\src\\my hound\"\n"),
-            "{text}"
-        );
+    fn windows_install_offers_no_plugin() {
+        // The plugin manifest is not designed for Windows (a non-goal).
+        for plugin_dir in [None, Some(PathBuf::from(r"C:\src\my hound"))] {
+            let text = install_text(
+                Platform::Windows,
+                &PathBuf::from(r"C:\Tools\hound.exe"),
+                plugin_dir.as_deref(),
+            )
+            .unwrap();
+            assert!(!text.contains("plugin"), "{text}");
+            assert_eq!(text.matches("[[keys.command]]").count(), 3);
+            assert!(text.ends_with("height = \"80%\"\n"), "{text}");
+        }
     }
 
     #[test]
