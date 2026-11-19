@@ -119,7 +119,7 @@ pub fn run(
         index: Arc::clone(&index),
         host: host.clone(),
         config: config.clone(),
-        home: std::env::var("HOME").ok(),
+        home: hound_core::config::home_dir().and_then(|h| h.into_os_string().into_string().ok()),
         tx: tx.clone(),
         routes: remotes.routes,
         workers: remotes.workers,

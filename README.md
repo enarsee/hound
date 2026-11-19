@@ -279,10 +279,10 @@ child instead; see [Windows](#windows)).
 
 ## Windows
 
-**Status:** hound is built and its test suite run on Windows in CI
-(`windows-latest`), but it has not yet been run by hand on a Windows machine,
-and its herdr integration (the popup, focusing panes over herdr's named pipe,
-resuming in a new tab) has not been tried at all. Expect rough edges.
+**Status:** CI builds hound and runs its tests on Windows (`windows-latest`).
+hound has not been run by hand on a Windows machine, and its herdr
+integration (the popup, focusing panes over herdr's named pipe, resuming in a
+new tab) has not been tried. Expect rough edges.
 
 ### Building on Windows
 
@@ -532,11 +532,10 @@ use they have had.
   `herdr --machine`, whether the client's view follows after a remote resume,
   and whether the list commands through `--machine` return the same shapes as
   locally.
-- Running on macOS. hound is built and tested on macOS in CI, but has only
-  been run by hand on Linux.
-- Everything under [Windows](#windows): it is built and tested on Windows in
-  CI only, and nothing there, including the herdr integration, has been run
-  by hand.
+- Running on macOS. CI builds and tests hound on macOS, but it has only been
+  run by hand on Linux.
+- Everything under [Windows](#windows): CI builds and tests hound on Windows,
+  but nothing there, including the herdr integration, has been run by hand.
 - The herdr plugin manifest (`herdr-plugin.toml`): an action opening a popup
   pane through `herdr plugin pane open`.
 - Running outside herdr: opening, typing and closing were tried; Enter handing

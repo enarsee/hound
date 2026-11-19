@@ -148,7 +148,7 @@ impl Config {
         };
         let mut config: Config =
             toml::from_str(&text).with_context(|| format!("parsing config {}", path.display()))?;
-        let home = home_dir();
+        let home = home_dir().unwrap_or_default();
         config.claude_root = expand_home(&config.claude_root, &home);
         config.pi_root = expand_home(&config.pi_root, &home);
         for remote in &mut config.remotes {
@@ -242,7 +242,7 @@ fn current_locations() -> Locations {
     let local_appdata = env_path("LOCALAPPDATA");
     default_locations(
         Platform::current(),
-        &home_dir(),
+        &home_dir().unwrap_or_default(),
         appdata.as_deref(),
         local_appdata.as_deref(),
     )
@@ -274,6 +274,8 @@ fn env_path(var: &str) -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-fn home_dir() -> PathBuf {
-    env::home_dir().unwrap_or_default()
+/// The user's home directory: `$HOME` on Unix (or the password database when
+/// unset), the profile folder (`%USERPROFILE%`) on Windows.
+pub fn home_dir() -> Option<PathBuf> {
+    env::home_dir()
 }
