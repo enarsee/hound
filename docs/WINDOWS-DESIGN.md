@@ -115,9 +115,11 @@ It is used for finding `herdr` (when `HERDR_BIN_PATH` is unset) and for the
 standalone resume (`RunHere`), which now runs the resolved path.
 
 On Windows the standalone resume cannot replace hound's process, so hound runs
-the agent as a child and waits. While it waits, hound ignores console Ctrl+C
-and Ctrl+Break (`SetConsoleCtrlHandler` with no handler), so Ctrl+C reaches
-only the agent and hound does not exit underneath it. hound then exits with
+the agent as a child and waits. While it waits, hound registers a console
+control handler that swallows Ctrl+C and Ctrl+Break for hound itself, so hound
+does not exit underneath the agent. (The simpler `SetConsoleCtrlHandler(NULL,
+TRUE)` is not used: the "ignore Ctrl+C" flag it sets is inherited by child
+processes, so the agent would ignore Ctrl+C too. A handler is not inherited.) hound then exits with
 the agent's exit code. This uses `windows-sys`, which `interprocess` already
 depends on, as a direct Windows-only dependency; no new crate enters the
 build. The harness
@@ -239,7 +241,8 @@ Run by the tester after CI is green, in this order:
 - CI added in this project, without releases.
 - Bracketed paste failure ignored; on every platform an Enter that arrives in
   a burst of key presses is treated as pasted and does nothing.
-- On Windows the standalone resume ignores Ctrl+C in hound while the agent
+- On Windows the standalone resume swallows Ctrl+C in hound (through a
+  console control handler, not the inherited ignore flag) while the agent
   runs, using `windows-sys` directly.
 - `install` wraps the whole Windows command in an extra pair of quotes and
   strips the `\\?\` prefix.
