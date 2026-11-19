@@ -3,9 +3,10 @@ use hound::hound_core::host::LivePane;
 use hound::hound_core::index::SessionDoc;
 use hound::hound_core::model::{Harness, SessionKey};
 use hound::hound_core::open::OpenOutcome;
+use hound::hound_core::platform::Platform;
 use hound::hound_core::search::{Entry, Hit, Scope, Tier, build_entries};
 use hound::ui::render::{display_width, relative_age, row, row_lines, truncate};
-use hound::ui::{App, Effect, Exit, Input, draw, split_paste_bursts};
+use hound::ui::{App, Effect, Exit, Input, draw, split_paste_bursts, split_paste_bursts_on};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
@@ -1922,4 +1923,117 @@ fn pasted_code_with_tabs_does_not_open() {
             assert!(no_open(&effects), "{text:?}: {effects:?}");
         }
     }
+}
+
+// AltGr on Windows: crossterm reports an AltGr character as `Char(c)` with
+// CONTROL | ALT, since Windows reports AltGr as Left Ctrl + Right Alt.
+
+fn altgr(c: char) -> KeyEvent {
+    KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL | KeyModifiers::ALT)
+}
+
+#[test]
+fn windows_altgr_characters_are_typed() {
+    let mut app = App::new_on(Scope::All, true, Platform::Windows);
+    for c in ['@', '\\', '{', '€', 'ł'] {
+        assert_eq!(app.on_key(altgr(c)), Effect::Requery);
+    }
+    assert_eq!(app.query, "@\\{€ł");
+    // Shift as well (AltGr+Shift on some layouts).
+    let mut key = altgr('Ś');
+    key.modifiers |= KeyModifiers::SHIFT;
+    assert_eq!(app.on_key(key), Effect::Requery);
+    assert_eq!(app.query, "@\\{€łŚ");
+}
+
+#[test]
+fn windows_ctrl_alt_control_character_is_not_text() {
+    let mut app = App::new_on(Scope::All, true, Platform::Windows);
+    app.on_key(altgr('\u{1b}'));
+    app.on_key(altgr('\0'));
+    assert_eq!(app.query, "");
+}
+
+#[test]
+fn unix_ctrl_alt_characters_are_not_typed() {
+    let mut app = App::new_on(Scope::All, true, Platform::Unix);
+    assert_eq!(app.on_key(altgr('@')), Effect::None);
+    assert_eq!(app.query, "");
+    // Ctrl+Alt+U still clears the query there, as before.
+    app.query = "abc".to_string();
+    assert_eq!(app.on_key(altgr('u')), Effect::Requery);
+    assert_eq!(app.query, "");
+}
+
+#[test]
+fn windows_ctrl_bindings_still_work() {
+    let mut app = App::new_on(Scope::All, true, Platform::Windows);
+    app.query = "abc".to_string();
+    assert_eq!(app.on_key(ctrl('u')), Effect::Requery);
+    assert_eq!(app.query, "");
+    assert_eq!(app.on_key(ctrl('s')), Effect::Requery);
+    assert!(!app.include_subagents);
+    assert_eq!(app.on_key(ctrl('c')), Effect::Close);
+    // Alt alone is still not text.
+    let alt = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::ALT);
+    assert_eq!(app.on_key(alt), Effect::None);
+    assert_eq!(app.query, "");
+}
+
+#[test]
+fn windows_ctrl_n_and_ctrl_p_still_move() {
+    let (entries, hits) = closed_results(3);
+    let mut app = App::new_on(Scope::All, true, Platform::Windows);
+    app.set_results(entries, hits);
+    app.on_key(ctrl('n'));
+    app.on_key(ctrl('n'));
+    assert_eq!(app.selected, 2);
+    app.on_key(ctrl('p'));
+    assert_eq!(app.selected, 1);
+}
+
+#[test]
+fn windows_paste_with_altgr_characters_is_one_segment() {
+    let batch = [
+        ch('a'),
+        Event::Key(altgr('@')),
+        ch('b'),
+        ch('c'),
+        enter(),
+        Event::Key(altgr('{')),
+        ch('d'),
+    ];
+    for batch in [batch.to_vec(), with_releases(&batch)] {
+        assert_eq!(
+            split_paste_bursts_on(&batch, Platform::Windows),
+            vec![Input::Pasted("a@bc {d".to_string())],
+            "{batch:?}"
+        );
+        let mut app = App::new_on(Scope::All, true, Platform::Windows);
+        let effects: Vec<Effect> = split_paste_bursts_on(&batch, Platform::Windows)
+            .iter()
+            .map(|input| app.on_input(input))
+            .collect();
+        assert!(no_open(&effects), "{effects:?}");
+        assert_eq!(app.query, "a@bc {d");
+    }
+    // A burst of AltGr characters alone is a paste too.
+    let batch = [
+        Event::Key(altgr('\\')),
+        Event::Key(altgr('{')),
+        Event::Key(altgr('}')),
+    ];
+    assert_eq!(
+        split_paste_bursts_on(&batch, Platform::Windows),
+        vec![Input::Pasted("\\{}".to_string())]
+    );
+}
+
+#[test]
+fn unix_ctrl_alt_characters_still_end_a_segment() {
+    let batch = [ch('a'), Event::Key(altgr('@')), ch('b'), ch('c')];
+    assert_eq!(
+        split_paste_bursts_on(&batch, Platform::Unix),
+        batch.iter().map(key_input).collect::<Vec<_>>()
+    );
 }

@@ -5,6 +5,7 @@ use std::time::Duration;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use hound_core::model::SessionKey;
 use hound_core::open::OpenOutcome;
+use hound_core::platform::Platform;
 use hound_core::search::{Entry, Hit, Scope, merge_hits};
 
 /// What the event loop must do after a key.
@@ -37,19 +38,33 @@ pub enum Input {
 /// Consecutive printable key presses that make a segment a paste.
 const BURST_MIN: usize = 3;
 
-/// A key press of a character typed without Ctrl or Alt (Shift is fine).
-fn printable(key: &KeyEvent) -> Option<char> {
-    match key.code {
-        KeyCode::Char(c)
-            if key.kind == KeyEventKind::Press
-                && !key
-                    .modifiers
-                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
-        {
-            Some(c)
+/// The character a key types into the query, if it types one: a character
+/// without Ctrl or Alt (Shift is fine), or on Windows also one with both
+/// Ctrl and Alt. Windows reports AltGr as Left Ctrl + Right Alt, and
+/// crossterm passes that on as CONTROL | ALT, so `@`, `\`, `{` on many
+/// European layouts and every Polish diacritic arrive that way. A control
+/// character is never text.
+fn typed_char(key: &KeyEvent, platform: Platform) -> Option<char> {
+    let KeyCode::Char(c) = key.code else {
+        return None;
+    };
+    let ctrl_alt = KeyModifiers::CONTROL | KeyModifiers::ALT;
+    let text = match platform {
+        Platform::Unix => !key.modifiers.intersects(ctrl_alt),
+        Platform::Windows => {
+            !key.modifiers.intersects(ctrl_alt)
+                || (key.modifiers.contains(ctrl_alt) && !c.is_control())
         }
-        _ => None,
+    };
+    text.then_some(c)
+}
+
+/// A key press of a character it types (see [`typed_char`]).
+fn printable(key: &KeyEvent, platform: Platform) -> Option<char> {
+    if key.kind != KeyEventKind::Press {
+        return None;
     }
+    typed_char(key, platform)
 }
 
 /// A key release or repeat: inside a segment it neither counts nor ends it.
@@ -59,14 +74,14 @@ fn not_a_press(event: &Event) -> bool {
 
 /// A segment's key presses: `Some(c)` a printable character, `None` Enter.
 /// `None` for an event that cannot be part of a segment.
-fn segment_press(event: &Event) -> Option<Option<char>> {
+fn segment_press(event: &Event, platform: Platform) -> Option<Option<char>> {
     let Event::Key(key) = event else {
         return None;
     };
     if key.kind != KeyEventKind::Press {
         return None;
     }
-    match printable(key) {
+    match printable(key, platform) {
         Some(c) => Some(Some(c)),
         None if key.code == KeyCode::Enter => Some(None),
         None => None,
@@ -76,19 +91,26 @@ fn segment_press(event: &Event) -> Option<Option<char>> {
 /// How many events from the start of `events` form a segment: printable
 /// and Enter presses, with the releases and repeats among and after them. A
 /// segment starts at a press; 0 if `events` does not start with one.
-fn segment_len(events: &[Event]) -> usize {
-    if events.first().and_then(segment_press).is_none() {
+fn segment_len(events: &[Event], platform: Platform) -> usize {
+    if events
+        .first()
+        .and_then(|event| segment_press(event, platform))
+        .is_none()
+    {
         return 0;
     }
     events
         .iter()
-        .take_while(|event| not_a_press(event) || segment_press(event).is_some())
+        .take_while(|event| not_a_press(event) || segment_press(event, platform).is_some())
         .count()
 }
 
 /// The segment's presses, releases and repeats left out.
-fn presses(segment: &[Event]) -> Vec<Option<char>> {
-    segment.iter().filter_map(segment_press).collect()
+fn presses(segment: &[Event], platform: Platform) -> Vec<Option<char>> {
+    segment
+        .iter()
+        .filter_map(|event| segment_press(event, platform))
+        .collect()
 }
 
 /// Whether a segment's presses hold at least [`BURST_MIN`] printable
@@ -124,7 +146,7 @@ fn pasted_text(presses: &[Option<char>]) -> String {
 /// presses, a line break as Enter, and Enter opens the selected entry.
 ///
 /// The batch is cut into segments: runs of printable presses (characters
-/// without Ctrl or Alt) and Enter presses, with any key releases and
+/// without Ctrl or Alt, and on Windows AltGr characters) and Enter presses, with any key releases and
 /// repeats among them; every other key or event ends a segment and passes
 /// through on its own. A segment is pasted if it has at least three
 /// printable presses in a row, or an Enter press anywhere before the
@@ -143,15 +165,20 @@ fn pasted_text(presses: &[Option<char>]) -> String {
 /// is dropped; a paste split across two batches can still deliver the Enter
 /// of a short last line.
 pub fn split_paste_bursts(batch: &[Event]) -> Vec<Input> {
+    split_paste_bursts_on(batch, Platform::current())
+}
+
+/// [`split_paste_bursts`] for the keys of `platform`.
+pub fn split_paste_bursts_on(batch: &[Event], platform: Platform) -> Vec<Input> {
     let mut inputs = Vec::new();
     let mut pasting = false;
     let last_text = batch
         .iter()
-        .rposition(|event| matches!(segment_press(event), Some(Some(_))));
+        .rposition(|event| matches!(segment_press(event, platform), Some(Some(_))));
     let text_follows = |at: usize| last_text.is_some_and(|last| at < last);
     let mut i = 0;
     while i < batch.len() {
-        let len = segment_len(&batch[i..]);
+        let len = segment_len(&batch[i..], platform);
         if len == 0 {
             inputs.push(match &batch[i] {
                 Event::Key(key) => Input::Key(*key),
@@ -162,11 +189,11 @@ pub fn split_paste_bursts(batch: &[Event]) -> Vec<Input> {
             continue;
         }
         let segment = &batch[i..i + len];
-        let presses = presses(segment);
+        let presses = presses(segment, platform);
         let early_enter = segment
             .iter()
             .enumerate()
-            .any(|(j, event)| segment_press(event) == Some(None) && text_follows(i + j));
+            .any(|(j, event)| segment_press(event, platform) == Some(None) && text_follows(i + j));
         if pasting || early_enter || has_burst(&presses) {
             pasting = true;
             let text = pasted_text(&presses);
@@ -259,6 +286,8 @@ pub struct App {
     opening: Option<Option<Identity>>,
     /// Esc or Ctrl+C was pressed during an open: close once it finishes.
     close_requested: bool,
+    /// Whose keys `on_key` reads (see [`typed_char`]).
+    platform: Platform,
 }
 
 const OPENING: &str = "opening…";
@@ -300,6 +329,11 @@ fn valid_hits(entries: &[Entry], mut hits: Vec<Hit>) -> Vec<Hit> {
 
 impl App {
     pub fn new(scope: Scope, include_subagents: bool) -> App {
+        App::new_on(scope, include_subagents, Platform::current())
+    }
+
+    /// [`App::new`] reading keys as `platform` reports them.
+    pub fn new_on(scope: Scope, include_subagents: bool, platform: Platform) -> App {
         App {
             query: String::new(),
             scope,
@@ -316,6 +350,7 @@ impl App {
             confirm_target: None,
             opening: None,
             close_requested: false,
+            platform,
         }
     }
 
@@ -329,8 +364,13 @@ impl App {
                 self.status = None;
             }
         }
+        // Before the Ctrl bindings: on Windows a Ctrl+Alt character is AltGr
+        // text, not a binding.
+        if let Some(c) = typed_char(&key, self.platform) {
+            self.query.push(c);
+            return Effect::Requery;
+        }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        let plain = !ctrl && !key.modifiers.contains(KeyModifiers::ALT);
         match key.code {
             KeyCode::Char('u') if ctrl => {
                 self.query.clear();
@@ -343,10 +383,6 @@ impl App {
             KeyCode::Char('n') if ctrl => self.move_selection(1),
             KeyCode::Char('p') if ctrl => self.move_selection(-1),
             KeyCode::Char('c') if ctrl => self.close(),
-            KeyCode::Char(c) if plain => {
-                self.query.push(c);
-                Effect::Requery
-            }
             KeyCode::Backspace => {
                 self.query.pop();
                 Effect::Requery

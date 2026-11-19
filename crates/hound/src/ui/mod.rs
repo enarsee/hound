@@ -31,7 +31,10 @@ use hound_core::search::{Scope, build_entries, search};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
-pub use app::{AfterRefresh, App, Effect, Exit, Input, after_refresh, split_paste_bursts};
+pub use app::{
+    AfterRefresh, App, Effect, Exit, Input, after_refresh, split_paste_bursts,
+    split_paste_bursts_on,
+};
 pub use render::draw;
 
 use crate::herdr::CliHerdr;

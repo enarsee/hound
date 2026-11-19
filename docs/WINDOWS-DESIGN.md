@@ -198,6 +198,17 @@ is a pure function over a batch of events, tested everywhere. Failure to
 enable bracketed paste is ignored; failure to enter the alternate screen or
 raw mode remains an error.
 
+Windows reports AltGr as Left Ctrl + Right Alt, and crossterm passes that on
+as a character with CONTROL | ALT. So on Windows only, a character key with
+both Ctrl and Alt (and any Shift) that is not a control character is text:
+it is typed into the query, ahead of the Ctrl bindings, and counts as a
+printable press in the burst rule, so a paste holding `@`, `\`, `{` or `ł`
+stays one pasted segment. Ctrl alone and Alt alone are unchanged. On Linux
+and macOS, where terminals never send AltGr characters with Ctrl or Alt, a
+Ctrl+Alt character keeps today's meaning (Ctrl+Alt+U still clears the query).
+The choice is a pure function taking the platform, tested with Windows-shaped
+events on every platform.
+
 ### 9. `hound serve` and the token file
 
 `hound serve`, `hound serve --show-token` and `hound install --serve` exit 1 on
@@ -250,6 +261,8 @@ Run by the tester after CI is green, in this order:
 - CI added in this project, without releases.
 - Bracketed paste failure ignored; on every platform an Enter that arrives in
   a burst of key presses is treated as pasted and does nothing.
+- On Windows a Ctrl+Alt character is AltGr text, typed and pasted; Linux
+  and macOS keys are unchanged.
 - On Windows the standalone resume swallows Ctrl+C in hound (through a
   console control handler, not the inherited ignore flag) while the agent
   runs, using `windows-sys` directly.
