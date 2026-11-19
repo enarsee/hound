@@ -9,6 +9,8 @@ use std::time::Duration;
 use anyhow::Context;
 use serde::Deserialize;
 
+use crate::platform::Platform;
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(default)]
 pub struct Config {
@@ -104,12 +106,16 @@ fn enabled_by_default() -> bool {
 
 impl Default for Config {
     fn default() -> Self {
-        let home = home_dir();
+        let Locations {
+            claude_root,
+            pi_root,
+            ..
+        } = current_locations();
         Config {
             index_subagents: true,
             search_subagents: true,
-            claude_root: home.join(".claude/projects"),
-            pi_root: home.join(".pi/agent/sessions"),
+            claude_root,
+            pi_root,
             enrich: EnrichConfig::default(),
             serve: ServeConfig::default(),
             remotes: Vec::new(),
@@ -167,14 +173,91 @@ pub fn expand_home(path: &Path, home: &Path) -> PathBuf {
     }
 }
 
-/// `$HOUND_STATE_DIR`, or `~/.local/state/hound`.
-pub fn state_dir() -> PathBuf {
-    env_path("HOUND_STATE_DIR").unwrap_or_else(|| home_dir().join(".local/state/hound"))
+/// Where hound and the agents keep their files by default.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Locations {
+    /// hound's config file.
+    pub config: PathBuf,
+    /// hound's state directory, holding the index.
+    pub state: PathBuf,
+    /// Claude Code's session files.
+    pub claude_root: PathBuf,
+    /// pi's session files.
+    pub pi_root: PathBuf,
 }
 
-/// `$HOUND_CONFIG`, or `~/.config/hound/config.toml`.
+/// The default locations on `platform` for the user whose home directory is
+/// `home`. On Windows `appdata` and `local_appdata` are the values of
+/// `APPDATA` and `LOCALAPPDATA`, falling back to `<home>\AppData\Roaming` and
+/// `<home>\AppData\Local` when unset; on Unix they are ignored.
+pub fn default_locations(
+    platform: Platform,
+    home: &Path,
+    appdata: Option<&Path>,
+    local_appdata: Option<&Path>,
+) -> Locations {
+    match platform {
+        Platform::Unix => Locations {
+            config: home.join(".config/hound/config.toml"),
+            state: home.join(".local/state/hound"),
+            claude_root: home.join(".claude/projects"),
+            pi_root: home.join(".pi/agent/sessions"),
+        },
+        Platform::Windows => {
+            let roaming = appdata.map_or_else(
+                || windows_join(home, &["AppData", "Roaming"]),
+                Path::to_path_buf,
+            );
+            let local = local_appdata.map_or_else(
+                || windows_join(home, &["AppData", "Local"]),
+                Path::to_path_buf,
+            );
+            Locations {
+                config: windows_join(&roaming, &["hound", "config.toml"]),
+                state: windows_join(&local, &["hound"]),
+                claude_root: windows_join(home, &[".claude", "projects"]),
+                pi_root: windows_join(home, &[".pi", "agent", "sessions"]),
+            }
+        }
+    }
+}
+
+/// `base` followed by `parts`, each after a backslash. Works on the string so
+/// that a Windows path is built the same on any platform.
+fn windows_join(base: &Path, parts: &[&str]) -> PathBuf {
+    let mut out = base.as_os_str().to_owned();
+    for part in parts {
+        let bytes = out.as_encoded_bytes();
+        if !matches!(bytes.last(), None | Some(b'\\' | b'/')) {
+            out.push("\\");
+        }
+        out.push(part);
+    }
+    PathBuf::from(out)
+}
+
+/// [`default_locations`] for this machine and user.
+fn current_locations() -> Locations {
+    let appdata = env_path("APPDATA");
+    let local_appdata = env_path("LOCALAPPDATA");
+    default_locations(
+        Platform::current(),
+        &home_dir(),
+        appdata.as_deref(),
+        local_appdata.as_deref(),
+    )
+}
+
+/// `$HOUND_STATE_DIR`, or the platform's default (`~/.local/state/hound` on
+/// Unix, `%LOCALAPPDATA%\hound` on Windows).
+pub fn state_dir() -> PathBuf {
+    env_path("HOUND_STATE_DIR").unwrap_or_else(|| current_locations().state)
+}
+
+/// `$HOUND_CONFIG`, or the platform's default (`~/.config/hound/config.toml`
+/// on Unix, `%APPDATA%\hound\config.toml` on Windows).
 pub fn config_path() -> PathBuf {
-    env_path("HOUND_CONFIG").unwrap_or_else(|| home_dir().join(".config/hound/config.toml"))
+    env_path("HOUND_CONFIG").unwrap_or_else(|| current_locations().config)
 }
 
 /// `serve-token` in the directory holding the config file.

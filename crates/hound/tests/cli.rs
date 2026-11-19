@@ -6,11 +6,17 @@
 mod common;
 
 use std::fs;
+#[cfg(unix)]
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Output, Stdio};
+#[cfg(unix)]
+use std::process::{Child, Stdio};
+use std::process::{Command, Output};
+#[cfg(unix)]
 use std::sync::mpsc;
+#[cfg(unix)]
 use std::thread;
+#[cfg(unix)]
 use std::time::{Duration, Instant};
 
 use common::*;
@@ -172,6 +178,7 @@ fn debug_prefix_and_errors() {
     assert!(err.contains(S1) && err.contains(P1), "{err}");
 }
 
+#[cfg(unix)]
 #[test]
 fn install_prints_three_bindings_and_changes_nothing() {
     let env = Env::with_sessions();
@@ -399,6 +406,7 @@ fn debug_exact_id_wins_over_longer_id() {
     assert!(!stdout(&out).contains("Long one"), "{}", stdout(&out));
 }
 
+#[cfg(unix)]
 #[test]
 fn install_links_the_checkout_holding_the_manifest() {
     let env = Env::empty();
@@ -471,6 +479,7 @@ fn debug_output_carries_no_terminal_controls() {
     assert!(user_lines[0].contains("second line"), "{text}");
 }
 
+#[cfg(unix)]
 impl Env {
     /// Appends `extra` to the env's config.
     fn append_config(&self, extra: &str) {
@@ -505,8 +514,10 @@ impl Env {
 }
 
 /// Kills and reaps the child when dropped, including when a test fails.
+#[cfg(unix)]
 struct KillOnDrop(Child);
 
+#[cfg(unix)]
 impl Drop for KillOnDrop {
     fn drop(&mut self) {
         let _ = self.0.kill();
@@ -514,8 +525,10 @@ impl Drop for KillOnDrop {
     }
 }
 
+#[cfg(unix)]
 const SERVE_ON: &str = "[serve]\nenabled = true\nbind = \"127.0.0.1:0\"\n";
 
+#[cfg(unix)]
 #[test]
 fn serve_is_off_by_default() {
     for extra in ["", "[serve]\nbind = \"127.0.0.1:0\"\n"] {
@@ -532,6 +545,7 @@ fn serve_is_off_by_default() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn serve_without_bind_is_an_error() {
     let env = Env::empty();
@@ -555,6 +569,7 @@ fn install_without_serve_flag_does_not_mention_remotes() {
     assert!(!text.contains("remote"), "{text}");
 }
 
+#[cfg(unix)]
 #[test]
 fn serve_refuses_unspecified_address() {
     let env = Env::empty();
@@ -568,6 +583,7 @@ fn serve_refuses_unspecified_address() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn serve_show_token_prints_and_persists() {
     use std::os::unix::fs::PermissionsExt;
@@ -587,6 +603,7 @@ fn serve_show_token_prints_and_persists() {
     assert_eq!(meta.permissions().mode() & 0o777, 0o600);
 }
 
+#[cfg(unix)]
 #[test]
 fn serve_refuses_a_token_file_others_can_read() {
     use std::os::unix::fs::PermissionsExt;
@@ -608,6 +625,7 @@ fn serve_refuses_a_token_file_others_can_read() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn serve_answers_then_dies_with_the_test() {
     let env = Env::with_sessions();
@@ -661,6 +679,7 @@ fn serve_answers_then_dies_with_the_test() {
     drop(serve);
 }
 
+#[cfg(unix)]
 #[test]
 fn install_serve_prints_a_unit_and_changes_nothing() {
     let env = Env::with_sessions();
@@ -702,6 +721,7 @@ fn popup_skips_refresh_when_heartbeat_is_fresh() {
     assert!(!skip_start_refresh(None));
 }
 
+#[cfg(unix)]
 #[test]
 fn serve_refuses_a_token_file_that_is_a_link_or_not_a_file() {
     use std::os::unix::fs::{PermissionsExt, symlink};
@@ -737,6 +757,7 @@ fn serve_refuses_a_token_file_that_is_a_link_or_not_a_file() {
 /// against a URL the client refuses before connecting. Waits until both
 /// sessions are served, then `settle` longer, and returns everything the
 /// service wrote to stderr.
+#[cfg(unix)]
 fn serve_stderr_with_enrichment(enrich_extra: &str, settle: Duration) -> String {
     let env = Env::with_sessions();
     enable_enrich(
@@ -792,6 +813,7 @@ fn serve_stderr_with_enrichment(enrich_extra: &str, settle: Duration) -> String 
     lines.join("\n")
 }
 
+#[cfg(unix)]
 #[test]
 fn serve_with_enrichment_and_categories_enriches() {
     // The control for the test below: the same setup with categories does run
@@ -802,6 +824,7 @@ fn serve_with_enrichment_and_categories_enriches() {
     assert!(!err.contains("enrich.categories"), "{err}");
 }
 
+#[cfg(unix)]
 #[test]
 fn serve_with_enrichment_and_no_categories_does_not_enrich() {
     let err = serve_stderr_with_enrichment("", Duration::from_millis(1500));
@@ -811,4 +834,37 @@ fn serve_with_enrichment_and_no_categories_does_not_enrich() {
         .collect();
     assert_eq!(notes.len(), 1, "{err}");
     assert!(!err.contains("enrichment failed"), "{err}");
+}
+
+#[cfg(windows)]
+#[test]
+fn serve_is_refused_on_windows() {
+    let env = Env::empty();
+    for args in [
+        &["serve"][..],
+        &["serve", "--show-token"][..],
+        &["install", "--serve"][..],
+    ] {
+        let out = env.hound(args);
+        assert_eq!(out.status.code(), Some(1), "{args:?} {}", stderr(&out));
+        assert!(
+            stderr(&out).contains("not supported on Windows"),
+            "{args:?} {}",
+            stderr(&out)
+        );
+        assert!(stdout(&out).is_empty(), "{args:?} {}", stdout(&out));
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn install_prints_cmd_bindings_on_windows() {
+    let env = Env::empty();
+    let out = env.hound(&["install"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(text.contains(r"%APPDATA%\herdr\config.toml"), "{text}");
+    assert_eq!(text.matches(r#"command = "\"\""#).count(), 3, "{text}");
+    // No verbatim `\\?\` prefix, raw or TOML-escaped.
+    assert!(!text.contains(r"\\?\"), "{text}");
 }

@@ -1,6 +1,7 @@
 mod common;
 
 use std::fs::{self, File};
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, UNIX_EPOCH};
@@ -14,7 +15,9 @@ use hound_core::remote::PROTOCOL;
 use hound_core::remote::handler::{
     MAX_BODY, MAX_TERM_CHARS, MAX_TERMS, Request, Response, ServeContext, handle,
 };
-use hound_core::remote::token::{load_or_create_token, read_token, tokens_equal};
+#[cfg(unix)]
+use hound_core::remote::token::load_or_create_token;
+use hound_core::remote::token::{read_token, tokens_equal};
 use hound_core::remote::wire::{
     Envelope, ErrorBody, Info, SessionFacts, Sessions, TermsResponse, WireSession,
 };
@@ -571,10 +574,12 @@ fn unknown_fields_are_ignored_on_deserialise() {
     );
 }
 
+#[cfg(unix)]
 fn mode(path: &Path) -> u32 {
     fs::metadata(path).unwrap().permissions().mode() & 0o777
 }
 
+#[cfg(unix)]
 #[test]
 fn token_created_once_with_private_mode() {
     let dir = tempfile::tempdir().unwrap();

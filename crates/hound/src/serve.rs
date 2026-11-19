@@ -1,5 +1,6 @@
 //! `hound serve`: keeps the index up to date and offers it to other machines
-//! over HTTP. Off unless the config sets `serve.enabled = true`.
+//! over HTTP. Off unless the config sets `serve.enabled = true`. Unix only:
+//! `main.rs` compiles this module on Unix and a refusing stub elsewhere.
 
 mod schedule;
 
@@ -268,9 +269,15 @@ fn hostname() -> String {
         .unwrap_or_else(|| "unknown".to_string())
 }
 
+/// Prints what `hound install --serve` prints for the executable `exe`.
+pub(crate) fn print_unit(exe: &Path) -> Outcome {
+    print!("{}", unit_text(exe, &config::config_path()));
+    Ok(())
+}
+
 /// The text `hound install --serve` prints: a systemd user unit running
 /// `<exe> serve`, and how to install it.
-pub(crate) fn unit_text(exe: &Path, config_path: &Path) -> String {
+fn unit_text(exe: &Path, config_path: &Path) -> String {
     let mut out = String::new();
     out.push_str("# hound serve as a systemd user service. Run\n");
     out.push_str("#   mkdir -p ~/.config/systemd/user\n");

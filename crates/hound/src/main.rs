@@ -1,6 +1,28 @@
 //! The `hound` command line.
 
+#[cfg(unix)]
 mod serve;
+
+/// `hound serve` needs Unix file modes and ownership for its token file;
+/// elsewhere its entry points refuse.
+#[cfg(not(unix))]
+mod serve {
+    use std::path::Path;
+
+    use crate::{Failure, Outcome};
+
+    fn unsupported() -> Failure {
+        Failure("hound serve is not supported on Windows".to_string())
+    }
+
+    pub(crate) fn run(_show_token: bool) -> Outcome {
+        Err(unsupported())
+    }
+
+    pub(crate) fn print_unit(_exe: &Path) -> Outcome {
+        Err(unsupported())
+    }
+}
 
 use std::env;
 use std::io::{self, IsTerminal};
@@ -18,6 +40,7 @@ use hound_core::enrich::{self, Attempt, EnrichStats, HttpClient};
 use hound_core::host::Host;
 use hound_core::index::{Index, SessionDoc};
 use hound_core::model::{Role, SessionKey};
+use hound_core::platform::Platform;
 use hound_core::search::Scope;
 
 #[derive(Parser)]
@@ -436,12 +459,13 @@ const BINDINGS: [(&str, &str, &str); 3] = [
 fn run_install(serve: bool) -> Outcome {
     let exe = env::current_exe()
         .and_then(|p| p.canonicalize())
+        .map(|p| printable_exe_path(&p))
         .map_err(|e| Failure(format!("locating the hound executable: {e}")))?;
     if serve {
-        print!("{}", serve::unit_text(&exe, &config::config_path()));
-    } else {
-        print!("{}", install_text(&exe, plugin_dir().as_deref()));
+        return serve::print_unit(&exe);
     }
+    let text = install_text(Platform::current(), &exe, plugin_dir().as_deref()).map_err(Failure)?;
+    print!("{text}");
     Ok(())
 }
 
@@ -451,25 +475,65 @@ fn plugin_dir() -> Option<PathBuf> {
         .join("../..")
         .canonicalize()
         .ok()?;
-    repo.join("herdr-plugin.toml").is_file().then_some(repo)
+    repo.join("herdr-plugin.toml")
+        .is_file()
+        .then(|| printable_exe_path(&repo))
 }
 
-/// The text `hound install` prints. `plugin_dir` is the directory holding
-/// `herdr-plugin.toml`, when known.
-fn install_text(exe: &Path, plugin_dir: Option<&Path>) -> String {
-    let exe = shell_quote(&exe.to_string_lossy());
+/// `path` without the `\\?\` prefix `canonicalize` adds on Windows, which
+/// `cmd.exe` cannot run: `\\?\UNC\server\share\…` becomes
+/// `\\server\share\…` and `\\?\C:\…` becomes `C:\…`. Other paths, including
+/// every Unix path, are unchanged.
+fn printable_exe_path(path: &Path) -> PathBuf {
+    let Some(s) = path.to_str() else {
+        return path.to_path_buf();
+    };
+    if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+        PathBuf::from(format!(r"\\{rest}"))
+    } else if let Some(rest) = s.strip_prefix(r"\\?\") {
+        PathBuf::from(rest)
+    } else {
+        path.to_path_buf()
+    }
+}
+
+/// The text `hound install` prints for `platform`. `plugin_dir` is the
+/// directory holding `herdr-plugin.toml`, when known. On Windows herdr runs
+/// the command through `cmd.exe`, which cannot quote a path holding `"` or
+/// `%`; such a path is an error.
+fn install_text(
+    platform: Platform,
+    exe: &Path,
+    plugin_dir: Option<&Path>,
+) -> Result<String, String> {
+    let exe = exe.to_string_lossy();
+    if platform == Platform::Windows
+        && let Some(bad) = exe.chars().find(|c| matches!(c, '"' | '%'))
+    {
+        return Err(format!(
+            "the hound path contains a character cmd.exe cannot quote: {bad}"
+        ));
+    }
+    let config_file = match platform {
+        Platform::Unix => "~/.config/herdr/config.toml",
+        Platform::Windows => "%APPDATA%\\herdr\\config.toml",
+    };
+    let command = |scope: &str| match platform {
+        Platform::Unix => format!("{} ui --scope {scope}", shell_quote(&exe)),
+        // cmd.exe removes the outer pair of quotes and keeps the inner.
+        Platform::Windows => format!("\"\"{exe}\" ui --scope {scope}\""),
+    };
     let mut out = String::new();
-    out.push_str("# hound key bindings for herdr. Add these to ~/.config/herdr/config.toml,\n");
+    out.push_str(&format!(
+        "# hound key bindings for herdr. Add these to {config_file},\n"
+    ));
     out.push_str("# then run `herdr server reload-config` (or restart herdr).\n");
     out.push_str("# `hound install` only prints this; it changes nothing.\n");
     for (key, scope, description) in BINDINGS {
         out.push_str("\n[[keys.command]]\n");
         out.push_str(&format!("key = {}\n", toml_string(key)));
         out.push_str("type = \"popup\"\n");
-        out.push_str(&format!(
-            "command = {}\n",
-            toml_string(&format!("{exe} ui --scope {scope}"))
-        ));
+        out.push_str(&format!("command = {}\n", toml_string(&command(scope))));
         out.push_str(&format!("description = {}\n", toml_string(description)));
         out.push_str("width = \"80%\"\n");
         out.push_str("height = \"80%\"\n");
@@ -477,15 +541,19 @@ fn install_text(exe: &Path, plugin_dir: Option<&Path>) -> String {
     out.push_str("\n# Optional, instead of the bindings above: register hound as a herdr plugin\n");
     out.push_str("# (see README.md; needs `hound` on the herdr server's PATH):\n");
     match plugin_dir {
-        Some(dir) => out.push_str(&format!(
-            "#   herdr plugin link {}\n",
-            shell_quote(&dir.to_string_lossy())
-        )),
+        Some(dir) => {
+            let dir = dir.to_string_lossy();
+            let dir = match platform {
+                Platform::Unix => shell_quote(&dir),
+                Platform::Windows => format!("\"{dir}\""),
+            };
+            out.push_str(&format!("#   herdr plugin link {dir}\n"));
+        }
         None => out.push_str(
             "#   herdr plugin link <the hound checkout, the directory containing herdr-plugin.toml>\n",
         ),
     }
-    out
+    Ok(out)
 }
 
 /// `s` as a TOML basic string.
@@ -549,7 +617,7 @@ mod tests {
 
     #[test]
     fn install_without_a_plugin_dir_names_the_manifest() {
-        let text = install_text(Path::new("/opt/hound"), None);
+        let text = install_text(Platform::Unix, Path::new("/opt/hound"), None).unwrap();
         assert!(text.contains("herdr plugin link <"), "{text}");
         assert!(text.contains("herdr-plugin.toml"), "{text}");
         assert_eq!(text.matches("[[keys.command]]").count(), 3);
@@ -557,10 +625,123 @@ mod tests {
 
     #[test]
     fn install_with_a_plugin_dir_links_it() {
-        let text = install_text(Path::new("/opt/hound"), Some(Path::new("/src/my hound")));
+        let text = install_text(
+            Platform::Unix,
+            Path::new("/opt/hound"),
+            Some(Path::new("/src/my hound")),
+        )
+        .unwrap();
         assert!(
             text.contains("herdr plugin link '/src/my hound'\n"),
             "{text}"
+        );
+    }
+
+    #[test]
+    fn unix_install_text_unchanged() {
+        let expected = r#"# hound key bindings for herdr. Add these to ~/.config/herdr/config.toml,
+# then run `herdr server reload-config` (or restart herdr).
+# `hound install` only prints this; it changes nothing.
+
+[[keys.command]]
+key = "prefix+space"
+type = "popup"
+command = "/usr/local/bin/hound ui --scope all"
+description = "hound: search all sessions"
+width = "80%"
+height = "80%"
+
+[[keys.command]]
+key = "prefix+a"
+type = "popup"
+command = "/usr/local/bin/hound ui --scope active"
+description = "hound: search live agents"
+width = "80%"
+height = "80%"
+
+[[keys.command]]
+key = "prefix+shift+o"
+type = "popup"
+command = "/usr/local/bin/hound ui --scope old"
+description = "hound: search closed sessions"
+width = "80%"
+height = "80%"
+
+# Optional, instead of the bindings above: register hound as a herdr plugin
+# (see README.md; needs `hound` on the herdr server's PATH):
+#   herdr plugin link <the hound checkout, the directory containing herdr-plugin.toml>
+"#;
+        let text = install_text(Platform::Unix, Path::new("/usr/local/bin/hound"), None).unwrap();
+        assert_eq!(text, expected);
+    }
+
+    #[test]
+    fn windows_install_quoting() {
+        let exe = PathBuf::from(r"C:\Program Files (x86)\hound\hound.exe");
+        let text = install_text(Platform::Windows, &exe, None).unwrap();
+        let commands: Vec<&str> = text
+            .lines()
+            .filter_map(|l| l.strip_prefix("command = "))
+            .collect();
+        let expected: Vec<String> = ["all", "active", "old"]
+            .iter()
+            .map(|scope| {
+                toml_string(&format!(
+                    r#"""C:\Program Files (x86)\hound\hound.exe" ui --scope {scope}""#
+                ))
+            })
+            .collect();
+        assert_eq!(commands, expected, "{text}");
+        // As TOML: the backslashes and quotes escaped.
+        assert!(
+            text.contains(
+                r#"command = "\"\"C:\\Program Files (x86)\\hound\\hound.exe\" ui --scope all\""#
+            ),
+            "{text}"
+        );
+        assert!(text.contains("%APPDATA%\\herdr\\config.toml"), "{text}");
+        assert!(text.contains("herdr server reload-config"), "{text}");
+        assert!(!text.contains("~/.config"), "{text}");
+        assert_eq!(text.matches("[[keys.command]]").count(), 3);
+
+        for (path, bad) in [(r"C:\100%\hound.exe", '%'), (r#"C:\a"b\hound.exe"#, '"')] {
+            let err = install_text(Platform::Windows, &PathBuf::from(path), None).unwrap_err();
+            assert_eq!(
+                err,
+                format!("the hound path contains a character cmd.exe cannot quote: {bad}")
+            );
+        }
+    }
+
+    #[test]
+    fn windows_install_plugin_line_uses_double_quotes() {
+        let text = install_text(
+            Platform::Windows,
+            &PathBuf::from(r"C:\Tools\hound.exe"),
+            Some(&PathBuf::from(r"C:\src\my hound")),
+        )
+        .unwrap();
+        assert!(
+            text.contains("#   herdr plugin link \"C:\\src\\my hound\"\n"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn printable_exe_path_strips_verbatim_prefix() {
+        let shown = |s: &str| printable_exe_path(&PathBuf::from(s));
+        assert_eq!(
+            shown(r"\\?\C:\Tools\hound.exe"),
+            PathBuf::from(r"C:\Tools\hound.exe")
+        );
+        assert_eq!(
+            shown(r"\\?\UNC\srv\share\hound.exe"),
+            PathBuf::from(r"\\srv\share\hound.exe")
+        );
+        assert_eq!(shown(r"C:\x"), PathBuf::from(r"C:\x"));
+        assert_eq!(
+            shown("/usr/local/bin/hound"),
+            PathBuf::from("/usr/local/bin/hound")
         );
     }
 }

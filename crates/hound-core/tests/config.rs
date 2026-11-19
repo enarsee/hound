@@ -1,8 +1,9 @@
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use hound_core::config::{Config, expand_home};
+use hound_core::config::{Config, default_locations, expand_home};
 use hound_core::model::{Harness, SessionKey};
+use hound_core::platform::Platform;
 
 #[test]
 fn missing_file_gives_defaults() {
@@ -152,4 +153,77 @@ fn remote_timeout_defaults_to_3_and_is_clamped() {
         assert_eq!(c.remotes[0].timeout_secs, Some(given));
         assert_eq!(c.remotes[0].timeout(), Duration::from_secs(used), "{given}");
     }
+}
+
+#[test]
+fn windows_locations() {
+    let home = PathBuf::from(r"C:\Users\alice");
+    let appdata = PathBuf::from(r"C:\Users\alice\AppData\Roaming");
+    let local = PathBuf::from(r"C:\Users\alice\AppData\Local");
+    let l = default_locations(Platform::Windows, &home, Some(&appdata), Some(&local));
+    assert_eq!(
+        l.config,
+        PathBuf::from(r"C:\Users\alice\AppData\Roaming\hound\config.toml")
+    );
+    assert_eq!(
+        l.state,
+        PathBuf::from(r"C:\Users\alice\AppData\Local\hound")
+    );
+    assert_eq!(
+        l.claude_root,
+        PathBuf::from(r"C:\Users\alice\.claude\projects")
+    );
+    assert_eq!(
+        l.pi_root,
+        PathBuf::from(r"C:\Users\alice\.pi\agent\sessions")
+    );
+}
+
+#[test]
+fn windows_locations_without_appdata_vars() {
+    let home = PathBuf::from(r"C:\Users\alice");
+    let l = default_locations(Platform::Windows, &home, None, None);
+    assert_eq!(
+        l.config,
+        PathBuf::from(r"C:\Users\alice\AppData\Roaming\hound\config.toml")
+    );
+    assert_eq!(
+        l.state,
+        PathBuf::from(r"C:\Users\alice\AppData\Local\hound")
+    );
+    assert_eq!(
+        l.claude_root,
+        PathBuf::from(r"C:\Users\alice\.claude\projects")
+    );
+    assert_eq!(
+        l.pi_root,
+        PathBuf::from(r"C:\Users\alice\.pi\agent\sessions")
+    );
+}
+
+#[test]
+fn windows_locations_tolerate_a_trailing_separator() {
+    let home = PathBuf::from(r"C:\Users\alice\");
+    let appdata = PathBuf::from(r"D:\Roaming\");
+    let l = default_locations(Platform::Windows, &home, Some(&appdata), None);
+    assert_eq!(l.config, PathBuf::from(r"D:\Roaming\hound\config.toml"));
+    assert_eq!(
+        l.claude_root,
+        PathBuf::from(r"C:\Users\alice\.claude\projects")
+    );
+}
+
+#[test]
+fn unix_locations_unchanged() {
+    let home = Path::new("/home/alice");
+    // The Windows variables are ignored on Unix.
+    let ignored = Path::new("/elsewhere");
+    let l = default_locations(Platform::Unix, home, Some(ignored), Some(ignored));
+    assert_eq!(
+        l.config,
+        PathBuf::from("/home/alice/.config/hound/config.toml")
+    );
+    assert_eq!(l.state, PathBuf::from("/home/alice/.local/state/hound"));
+    assert_eq!(l.claude_root, PathBuf::from("/home/alice/.claude/projects"));
+    assert_eq!(l.pi_root, PathBuf::from("/home/alice/.pi/agent/sessions"));
 }

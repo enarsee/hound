@@ -1,18 +1,25 @@
 //! The service's access token: 32 random bytes as hex in a file only its
-//! owner can read.
+//! owner can read. Creating it needs Unix file modes and `/dev/urandom`, so
+//! [`load_or_create_token`] exists on Unix only; reading one is portable.
 
-use std::fs::{self, DirBuilder, File, OpenOptions};
+use std::fs;
+#[cfg(unix)]
+use std::fs::{DirBuilder, File, OpenOptions};
+#[cfg(unix)]
 use std::io::{self, Read, Write};
+#[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::Path;
 
 use anyhow::Context;
 
+#[cfg(unix)]
 const TOKEN_BYTES: usize = 32;
 
 /// The token in `path`, creating it (and any missing parent directories, mode
 /// 0700) if the file does not exist. A new file is created with mode 0600
 /// before anything is written to it.
+#[cfg(unix)]
 pub fn load_or_create_token(path: &Path) -> anyhow::Result<String> {
     if path.exists() {
         return read_token(path);
@@ -72,6 +79,7 @@ pub fn tokens_equal(a: &str, b: &str) -> bool {
 
 /// `TOKEN_BYTES` bytes from the operating system's random source, as
 /// lowercase hex.
+#[cfg(unix)]
 fn random_hex() -> anyhow::Result<String> {
     let mut bytes = [0u8; TOKEN_BYTES];
     File::open("/dev/urandom")
