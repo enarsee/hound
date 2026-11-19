@@ -94,10 +94,11 @@ differs:
   version herdr uses (2.4.x).
 
 herdr's own client treats `Unsupported` from the pipe's receive timeout as
-normal on Windows, so on Windows the whole call (connect, write, read) runs on
-a helper thread and the caller waits at most 10 seconds, abandoning the thread
-on timeout, as the remote snapshot limit already does. The Unix path is
-unchanged.
+normal on Windows, so on Windows the connect runs eagerly on a helper thread
+under a 10-second limit, and each call (write, then read) runs on a helper
+thread under its own 10-second limit: 20 seconds in the worst case. The caller
+abandons a timed-out thread, as the remote snapshot limit already does. The
+Unix path is unchanged.
 
 ### 2. Finding programs (`herdr.rs`, `main.rs`)
 
@@ -155,7 +156,8 @@ one more pair of quotes that `cmd.exe` removes. A path containing `"` or `%`
 The executable path is printed without the `\\?\` prefix that
 `canonicalize` adds on Windows (and without canonicalising a UNC path into a
 form `cmd.exe` cannot run). `install_text` takes the platform as a parameter so both forms are
-tested everywhere.
+tested everywhere. The Windows text has no `herdr plugin link` lines, since
+the plugin manifest is a non-goal there.
 
 ### 5. Path matching (`hound-core/src/search.rs`)
 
@@ -245,13 +247,27 @@ Run by the tester after CI is green, in this order:
    locations in § 3).
 3. `hound ui` in a plain PowerShell window: search, then Enter on a closed
    session resumes it in that window (confirms program resolution).
-4. Inside herdr: paste `hound install`'s bindings into
+4. Ctrl+C in that resumed agent reaches the agent and hound stays alive; after
+   the agent quits, `$LASTEXITCODE` is the agent's exit code (confirms the
+   console control handler, § 2).
+5. In the plain-console popup, with an AltGr keyboard layout: AltGr
+   characters (`@`, `{`, `\`) and non-ASCII letters (`é`, `ü`, `ł`) are
+   typed; a one-line paste and a three-line paste land in the query with the
+   lines joined by spaces, and nothing opens (confirms § 8, and how a pasted
+   line break arrives on Windows).
+6. Inside herdr: paste `hound install`'s bindings into
    `%APPDATA%\herdr\config.toml`, `herdr server reload-config`, press
    `prefix+space`: the popup opens and live agents show with workspace and tab.
-5. Enter on a live agent focuses it; Enter on a live plain shell pane focuses
+7. Enter on a live agent focuses it; Enter on a live plain shell pane focuses
    it (this one needs the named pipe).
-6. Enter on a closed session opens a new tab and resumes it.
-7. Optional: a `[[remote]]` block pointing at a Linux `hound serve`.
+8. Enter on a closed session opens a new tab and resumes it.
+9. Step 5 repeated in the popup inside herdr, where herdr may wrap the paste
+   in bracketed-paste markers before the console delivers it: same results.
+10. With enrichment enabled and a session not yet summarised, the popup
+    inside herdr closed with Esc right after loading: the background
+    `hound enrich` keeps running until it finishes and the next popup shows
+    its summaries (confirms the detached-process flags, § 6).
+11. Optional: a `[[remote]]` block pointing at a Linux `hound serve`.
 
 ## Calls made by Claude
 
@@ -268,8 +284,10 @@ Run by the tester after CI is green, in this order:
   runs, using `windows-sys` directly.
 - `install` wraps the whole Windows command in an extra pair of quotes and
   strips the `\\?\` prefix.
-- The socket client keeps today's one-response behaviour; Windows adds an
-  overall 10-second limit through a helper thread.
+- The socket client keeps today's one-response behaviour; on Windows the
+  connect and each call get their own 10-second limit through a helper
+  thread (20 seconds worst case).
+- On Windows `hound install` offers no herdr plugin lines.
 
 ## Left to the builder
 

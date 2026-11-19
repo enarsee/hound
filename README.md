@@ -329,7 +329,16 @@ does not let the old index be deleted; hound then stops with
 - Outside herdr, Enter starts the agent (found on `PATH` using `PATHEXT`, so
   a `claude.cmd` shim works) as a child of hound in the same window, instead
   of replacing hound. Ctrl+C goes to the agent while hound waits; hound then
-  exits with the agent's exit code.
+  exits with the agent's exit code. hound stays running for the whole agent
+  session, keeping the index files open; while it does, `hound.exe` cannot be
+  overwritten, so a `cargo build` of hound fails until the agent exits.
+- `hound install` prints no `herdr plugin link` line: the herdr plugin is not
+  offered on Windows. Use the popup bindings.
+- The Windows console does not deliver a paste as one event, so the popup
+  treats a burst of key presses as pasted text: it joins the query, a line
+  break in it becomes a space, and it never opens anything. A character typed
+  with AltGr (which Windows reports as Ctrl+Alt), such as `@` or `{` on a
+  German keyboard, is typed as text.
 
 ### Trying it on a real Windows machine
 
@@ -340,14 +349,32 @@ These checks would move Windows support out of "tests only", in this order:
    locations above).
 3. `hound ui` in a plain PowerShell window: search, then Enter on a closed
    session resumes it in that window.
-4. Inside herdr: paste `hound install`'s bindings into
+4. In that resumed agent, press Ctrl+C: the agent handles it (for example
+   interrupts or asks to confirm) and the window does not drop back to
+   PowerShell. Quit the agent normally; `echo $LASTEXITCODE` then shows the
+   agent's exit code.
+5. In the popup in a plain PowerShell window, with a keyboard layout that has
+   AltGr (German, French or Polish, for example): type `@`, `{` and `\` with
+   AltGr, and a non-ASCII letter such as `é`, `ü` or `ł`: each appears in the
+   query. Then paste one line (`fix parser`), and a three-line text
+   (`alpha`, `beta`, `gamma` on separate lines): each lands in the query, the
+   lines joined by spaces, and nothing opens or resumes.
+6. Inside herdr: paste `hound install`'s bindings into
    `%APPDATA%\herdr\config.toml`, run `herdr server reload-config`, press
    `prefix+space`: the popup opens and live agents show with workspace and
    tab.
-5. Enter on a live agent focuses it; Enter on a live plain shell pane
+7. Enter on a live agent focuses it; Enter on a live plain shell pane
    focuses it (this one needs the named pipe).
-6. Enter on a closed session opens a new tab and resumes it.
-7. Optional: a `[[remote]]` block pointing at a Linux `hound serve`.
+8. Enter on a closed session opens a new tab and resumes it.
+9. Repeat step 5 in the popup inside herdr (typing, the one-line paste and
+   the three-line paste): the same results, and nothing opens.
+10. With `[enrich]` enabled, an endpoint that answers and at least one
+    session not yet summarised (quiet for `quiet_secs`), open the popup
+    inside herdr and close it with Esc as soon as it has loaded. Task Manager
+    still shows a `hound.exe` (the background `hound enrich`) until it
+    finishes, and the next popup shows the new summaries; `enrich.log` in
+    `%LOCALAPPDATA%\hound` names any failures.
+11. Optional: a `[[remote]]` block pointing at a Linux `hound serve`.
 
 ## Advanced: several machines
 
