@@ -91,16 +91,12 @@ fn presses(segment: &[Event]) -> Vec<Option<char>> {
     segment.iter().filter_map(segment_press).collect()
 }
 
-/// Whether a segment's presses are pasted text: at least [`BURST_MIN`]
-/// printable characters in a row, or an Enter directly followed by a
-/// printable character.
-fn looks_pasted(presses: &[Option<char>]) -> bool {
-    let run = presses
+/// Whether a segment's presses hold at least [`BURST_MIN`] printable
+/// characters in a row.
+fn has_burst(presses: &[Option<char>]) -> bool {
+    presses
         .split(Option::is_none)
-        .any(|chars| chars.len() >= BURST_MIN);
-    run || presses
-        .windows(2)
-        .any(|pair| pair[0].is_none() && pair[1].is_some())
+        .any(|chars| chars.len() >= BURST_MIN)
 }
 
 /// The text of pasted presses: each Enter a space between the characters
@@ -131,21 +127,28 @@ fn pasted_text(presses: &[Option<char>]) -> String {
 /// without Ctrl or Alt) and Enter presses, with any key releases and
 /// repeats among them; every other key or event ends a segment and passes
 /// through on its own. A segment is pasted if it has at least three
-/// printable presses in a row or an Enter directly followed by a printable
-/// press, or if an earlier segment of the batch was pasted (so a short line
-/// after a pasted Tab is still text). A pasted segment becomes one
+/// printable presses in a row, or an Enter press anywhere before the
+/// batch's last printable press (so an Enter followed by text, even past a
+/// pasted Tab, never acts), or if an earlier segment of the batch was pasted
+/// (so a short line after a pasted Tab is still text). A pasted segment becomes one
 /// [`Input::Pasted`] (none if it holds only Enters): each Enter a space
 /// between the characters around it, Enters at its start or end dropped, its
 /// releases and repeats dropped. Other segments pass through as keys. A
 /// bracketed paste becomes [`Input::Pasted`] with its text unchanged.
 ///
-/// Accepted costs, both failing safe (nothing opens): a fast typist whose
-/// three characters and Enter land in one batch (only when the popup's
-/// thread stalls) has that Enter dropped; a paste split across two batches
-/// can still deliver the Enter of a short last line.
+/// Accepted costs, all failing safe (nothing opens): a fast typist whose
+/// three characters and Enter, or Enter and any later character, land in
+/// one batch (only when the popup's thread stalls) has that Enter dropped;
+/// an Enter typed after another key in a paste's batch (`a b c Down Enter`)
+/// is dropped; a paste split across two batches can still deliver the Enter
+/// of a short last line.
 pub fn split_paste_bursts(batch: &[Event]) -> Vec<Input> {
     let mut inputs = Vec::new();
     let mut pasting = false;
+    let last_text = batch
+        .iter()
+        .rposition(|event| matches!(segment_press(event), Some(Some(_))));
+    let text_follows = |at: usize| last_text.is_some_and(|last| at < last);
     let mut i = 0;
     while i < batch.len() {
         let len = segment_len(&batch[i..]);
@@ -160,7 +163,11 @@ pub fn split_paste_bursts(batch: &[Event]) -> Vec<Input> {
         }
         let segment = &batch[i..i + len];
         let presses = presses(segment);
-        if pasting || looks_pasted(&presses) {
+        let early_enter = segment
+            .iter()
+            .enumerate()
+            .any(|(j, event)| segment_press(event) == Some(None) && text_follows(i + j));
+        if pasting || early_enter || has_burst(&presses) {
             pasting = true;
             let text = pasted_text(&presses);
             if !text.is_empty() {

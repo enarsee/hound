@@ -1860,3 +1860,66 @@ fn a_burst_does_not_complete_a_confirmation() {
         }
     );
 }
+
+fn with_releases(batch: &[Event]) -> Vec<Event> {
+    batch
+        .iter()
+        .flat_map(|e| [e.clone(), released(e)])
+        .collect()
+}
+
+fn has_enter_key(inputs: &[Input]) -> bool {
+    inputs.iter().any(
+        |i| matches!(i, Input::Key(key) if key.code == KeyCode::Enter && key.kind == KeyEventKind::Press),
+    )
+}
+
+#[test]
+fn enter_before_later_text_is_never_a_key() {
+    let down = Event::Key(k(KeyCode::Down));
+    let tab = Event::Key(k(KeyCode::Tab));
+    for batch in [
+        vec![enter(), down.clone(), ch('a')],
+        vec![ch('a'), enter(), tab.clone(), ch('b')],
+        vec![enter(), tab, ch('a'), ch('b'), ch('c')],
+    ] {
+        let inputs = split_paste_bursts(&batch);
+        assert!(!has_enter_key(&inputs), "{batch:?} => {inputs:?}");
+        let inputs = split_paste_bursts(&with_releases(&batch));
+        assert!(!has_enter_key(&inputs), "{batch:?} => {inputs:?}");
+    }
+}
+
+#[test]
+fn paste_after_an_armed_confirmation_does_not_open() {
+    let batch = [
+        enter(),
+        Event::Key(k(KeyCode::Tab)),
+        ch('a'),
+        ch('b'),
+        ch('c'),
+    ];
+    for batch in [batch.to_vec(), with_releases(&batch)] {
+        let mut app = app_with_hits(3);
+        app.ask_confirm("sure?".to_string());
+        let effects = feed(&mut app, &batch);
+        assert!(no_open(&effects), "{effects:?}");
+    }
+}
+
+#[test]
+fn pasted_code_with_tabs_does_not_open() {
+    for text in ["{\n\treturn x;", "\n\tfoo"] {
+        let batch = events(text);
+        for batch in [batch.clone(), with_releases(&batch)] {
+            let mut app = app_with_hits(3);
+            let effects = feed(&mut app, &batch);
+            assert!(no_open(&effects), "{text:?}: {effects:?}");
+            // And with a confirmation armed from an earlier batch.
+            let mut app = app_with_hits(3);
+            app.ask_confirm("sure?".to_string());
+            let effects = feed(&mut app, &batch);
+            assert!(no_open(&effects), "{text:?}: {effects:?}");
+        }
+    }
+}
