@@ -198,8 +198,9 @@ fn exec(program: &str, path: &Path, args: &[String]) -> Failure {
     }
 
     // SAFETY: registers a handler that touches no state; it stays registered until exit.
-    unsafe {
-        SetConsoleCtrlHandler(Some(ignore_interrupt), 1);
+    let registered = unsafe { SetConsoleCtrlHandler(Some(ignore_interrupt), 1) };
+    if registered == 0 {
+        return Failure(format!("ignoring Ctrl+C: {}", io::Error::last_os_error()));
     }
     match std::process::Command::new(path).args(args).status() {
         Ok(status) => std::process::exit(status.code().unwrap_or(1)),

@@ -12,8 +12,8 @@ const DEFAULT_PATHEXT: &str = ".COM;.EXE;.BAT;.CMD";
 /// Where `name` runs from, or `None`.
 ///
 /// A name containing `/` or `\` is used as is. Otherwise each `PATH` directory is tried in
-/// order (split on `;` on Windows, `:` on Unix; empty entries skipped). On Unix the bare name
-/// is tried in each directory. On Windows a name already ending in a `PATHEXT` extension is
+/// order: split on `;` on Windows, empty entries skipped; split on `:` on Unix, an empty
+/// entry meaning the current directory. On Unix the bare name is tried in each directory. On Windows a name already ending in a `PATHEXT` extension is
 /// tried as is; any other name is tried with each `PATHEXT` extension in order, never bare,
 /// the extension in lower case (Windows file names are case-insensitive).
 /// `is_runnable` decides whether a candidate exists and can be run; the returned path is
@@ -92,8 +92,9 @@ fn file_names(name: &str, platform: Platform, pathext: Option<&OsStr>) -> Vec<St
     }
 }
 
-/// The directories in `path_var`, split with the platform's separator, empty entries
-/// skipped; on Windows surrounding double quotes are removed from an entry.
+/// The directories in `path_var`, split with the platform's separator. On Unix an empty
+/// entry means the current directory (`.`), as for `execvp`; on Windows empty entries are
+/// skipped and surrounding double quotes are removed from an entry.
 fn split_path(path_var: &OsStr, platform: Platform) -> Vec<OsString> {
     let separator = match platform {
         Platform::Unix => b':',
@@ -102,13 +103,14 @@ fn split_path(path_var: &OsStr, platform: Platform) -> Vec<OsString> {
     path_var
         .as_encoded_bytes()
         .split(|&b| b == separator)
-        .map(|entry| match platform {
-            Platform::Windows => trim_quotes(entry),
-            Platform::Unix => entry,
+        .filter_map(|entry| match platform {
+            Platform::Windows => Some(trim_quotes(entry)).filter(|e| !e.is_empty()),
+            Platform::Unix if entry.is_empty() => Some(b".".as_slice()),
+            Platform::Unix => Some(entry),
         })
-        .filter(|entry| !entry.is_empty())
-        // SAFETY: each entry is a slice of `path_var`'s encoded bytes split on an ASCII byte
-        // and trimmed of ASCII quotes, so it starts and ends on a valid boundary.
+        // SAFETY: each entry is the ASCII `.` or a slice of `path_var`'s encoded bytes split
+        // on an ASCII byte and trimmed of ASCII quotes, so it starts and ends on a valid
+        // boundary.
         .map(|entry| unsafe { OsStr::from_encoded_bytes_unchecked(entry) }.to_os_string())
         .collect()
 }

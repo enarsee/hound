@@ -132,9 +132,17 @@ fn pathext_variants() {
         Some(".exe; ;.CMD"),
         &files,
     );
-    assert!(trimmed.is_some());
+    assert_eq!(trimmed, Some(PathBuf::from("C:\\a\\pi.cmd")));
+    let leading_space = resolve(
+        "pi",
+        Platform::Windows,
+        Some("C:\\a"),
+        Some(".EXE; .CMD"),
+        &files,
+    );
+    assert_eq!(leading_space, Some(PathBuf::from("C:\\a\\pi.cmd")));
     let default = resolve("pi", Platform::Windows, Some("C:\\a"), None, &files);
-    assert!(default.is_some());
+    assert_eq!(default, Some(PathBuf::from("C:\\a\\pi.cmd")));
 }
 
 #[test]
@@ -182,6 +190,26 @@ fn unix_bare_name_with_colon_separator() {
         &["/opt/bin/herdr", "/opt/bin/herdr.EXE"],
     );
     assert_eq!(found, Some(PathBuf::from("/opt/bin/herdr")));
+}
+
+#[test]
+fn unix_empty_entry_is_current_directory() {
+    let found = resolve(
+        "herdr",
+        Platform::Unix,
+        Some(":/opt/bin"),
+        None,
+        &["./herdr", "/opt/bin/herdr"],
+    );
+    assert_eq!(found, Some(PathBuf::from("./herdr")));
+    let trailing = resolve(
+        "herdr",
+        Platform::Unix,
+        Some("/usr/bin:"),
+        None,
+        &["./herdr"],
+    );
+    assert_eq!(trailing, Some(PathBuf::from("./herdr")));
 }
 
 #[test]
