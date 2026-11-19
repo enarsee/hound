@@ -409,17 +409,57 @@ fn rank(a: &Entry, a_tier: Tier, b: &Entry, b_tier: Tier) -> Ordering {
         .then_with(|| a.title().cmp(b.title()))
 }
 
-/// `cwd` without the leading `home` directory (keeping the `/` after it), if
-/// it lies inside it; unchanged otherwise, or when `home` is empty or `/`.
+/// `cwd` without the leading `home` directory (keeping the separator after
+/// it), if it lies inside it; unchanged otherwise, or when `home` is empty or
+/// a root (`/`, `C:\`).
+///
+/// A Windows-style `home` (a drive letter and `:`, or a leading `\\`) matches
+/// ASCII-case-insensitively with `/` and `\` as the same separator. The style
+/// is read from `home`, not from the running platform, since cwds may come
+/// from a remote machine.
 fn strip_home<'a>(cwd: &'a str, home: Option<&str>) -> &'a str {
-    let Some(home) = home.map(|h| h.trim_end_matches('/')) else {
+    let Some(home) = home else {
         return cwd;
     };
+    if is_windows_path(home) {
+        return strip_windows_home(cwd, home);
+    }
+    let home = home.trim_end_matches('/');
     if home.is_empty() {
         return cwd;
     }
     match cwd.strip_prefix(home) {
         Some(rest) if rest.is_empty() || rest.starts_with('/') => rest,
+        _ => cwd,
+    }
+}
+
+/// Whether `path` starts with a drive letter and `:`, or with `\\`.
+fn is_windows_path(path: &str) -> bool {
+    let b = path.as_bytes();
+    (b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':') || path.starts_with(r"\\")
+}
+
+/// [`strip_home`] for a Windows-style `home`.
+fn strip_windows_home<'a>(cwd: &'a str, home: &str) -> &'a str {
+    let is_sep = |b: u8| b == b'/' || b == b'\\';
+    let home = home.trim_end_matches(['/', '\\']);
+    // A bare drive (`C:`) is a root; a UNC home has at least a server name.
+    if home.len() <= 2 {
+        return cwd;
+    }
+    let (h, c) = (home.as_bytes(), cwd.as_bytes());
+    if c.len() < h.len() {
+        return cwd;
+    }
+    let same = h
+        .iter()
+        .zip(c)
+        .all(|(&x, &y)| x.eq_ignore_ascii_case(&y) || (is_sep(x) && is_sep(y)));
+    // Only ASCII bytes are matched loosely, so `h.len()` is a char boundary
+    // of `cwd` whenever the prefixes are the same.
+    match cwd.get(h.len()..) {
+        Some(rest) if same && rest.bytes().next().is_none_or(is_sep) => rest,
         _ => cwd,
     }
 }

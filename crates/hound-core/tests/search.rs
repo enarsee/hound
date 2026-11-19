@@ -651,3 +651,66 @@ fn home_prefix_is_stripped_only_at_a_component_boundary() {
         0
     );
 }
+
+/// How many entries a session in `cwd` gives for `query` with `home`.
+fn cwd_hits(cwd: &str, home: &str, query: &str) -> usize {
+    let mut s = session(Harness::Pi, "S1", "Pi notes", 100);
+    s.cwds = vec![cwd.to_string()];
+    s.resume_cwd = cwd.to_string();
+    let entries = build_entries(vec![s], vec![], NOW);
+    search(
+        &entries,
+        &FakeText::default(),
+        query,
+        Scope::All,
+        true,
+        Some(home),
+    )
+    .len()
+}
+
+#[test]
+fn windows_home_variants() {
+    // A trailing separator on home is ignored.
+    let (cwd, home) = (r"C:\Users\alice\proj\depot", r"C:\Users\alice\");
+    assert_eq!(cwd_hits(cwd, home, "proj"), 1);
+    assert_eq!(cwd_hits(cwd, home, "depot"), 1);
+    assert_eq!(cwd_hits(cwd, home, "users"), 0);
+    assert_eq!(cwd_hits(cwd, home, "alice"), 0);
+
+    // Windows paths compare case-insensitively.
+    let (cwd, home) = (r"C:\Users\Alice\depot", r"c:\users\alice");
+    assert_eq!(cwd_hits(cwd, home, "alice"), 0);
+    assert_eq!(cwd_hits(cwd, home, "depot"), 1);
+
+    // `/` and `\` are the same separator.
+    let (cwd, home) = (r"C:\Users\alice\depot", "C:/Users/alice");
+    assert_eq!(cwd_hits(cwd, home, "alice"), 0);
+    assert_eq!(cwd_hits(cwd, home, "depot"), 1);
+
+    // Stripped only at a component boundary.
+    let (cwd, home) = (r"C:\Users\alice\depot", r"C:\Users\al");
+    assert_eq!(cwd_hits(cwd, home, "alice"), 1);
+    assert_eq!(cwd_hits(cwd, home, "users"), 1);
+}
+
+#[test]
+fn windows_unc_home_is_stripped() {
+    let (cwd, home) = (r"\\server\Home\alice\depot", r"\\SERVER\home\alice");
+    assert_eq!(cwd_hits(cwd, home, "alice"), 0);
+    assert_eq!(cwd_hits(cwd, home, "server"), 0);
+    assert_eq!(cwd_hits(cwd, home, "depot"), 1);
+}
+
+#[test]
+fn windows_home_strips_cwd_equal_to_home() {
+    assert_eq!(cwd_hits(r"C:\Users\Alice", r"c:\users\alice\", "alice"), 0);
+}
+
+#[test]
+fn unix_home_case_still_matters() {
+    assert_eq!(cwd_hits("/home/Alice/x", "/home/alice", "alice"), 1);
+    assert_eq!(cwd_hits("/home/Alice/x", "/home/alice", "home"), 1);
+    // Unix homes do not treat `\` as a separator.
+    assert_eq!(cwd_hits(r"/home/alice\x", "/home/alice", "alice"), 1);
+}

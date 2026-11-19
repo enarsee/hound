@@ -656,3 +656,37 @@ fn committed_batch_is_visible_to_another_handle() {
 
     assert_eq!(seen, vec![(20, 20), (25, 25)]);
 }
+
+/// A rebuild whose old index cannot be deleted (here: a read-only directory;
+/// on Windows: files another process has open) fails with a clear message and
+/// leaves no `state.json`, so the next open rebuilds.
+#[cfg(unix)]
+#[test]
+fn rebuild_with_undeletable_index_reports_index_in_use() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let f = Fixture::new();
+    drop(f.indexed());
+    fs::write(
+        f.state.join("state.json"),
+        r#"{"schema_version":0,"heartbeat":0}"#,
+    )
+    .unwrap();
+    let index_dir = f.state.join("index");
+    fs::set_permissions(&index_dir, fs::Permissions::from_mode(0o555)).unwrap();
+
+    let result = Index::open(&f.state);
+    fs::set_permissions(&index_dir, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let err = format!("{:#}", result.err().expect("open should fail"));
+    assert!(
+        err.contains("another hound process is using the index"),
+        "{err}"
+    );
+    assert!(err.contains("close it and retry"), "{err}");
+    assert!(!f.state.join("state.json").exists());
+
+    let ix = f.open();
+    assert!(ix.sessions().unwrap().is_empty());
+    assert_eq!(f.refresh(&ix).added, 2);
+}

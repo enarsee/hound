@@ -311,7 +311,19 @@ impl Index {
     /// to leave a usable index (e.g. a concurrent first open creating it), and
     /// otherwise fails without touching the directory. Other errors, such as
     /// running out of file descriptors, are returned and wipe nothing.
+    ///
+    /// If the old index cannot be deleted during a rebuild (on Windows, while
+    /// another process has its files open), this fails saying so, leaving no
+    /// `state.json`, so the next open rebuilds.
     pub fn open(dir: &Path) -> anyhow::Result<Index> {
+        Index::open_with(dir, &|path| fs::remove_dir_all(path))
+    }
+
+    /// [`Index::open`] deleting the old index directory with `remove_dir`.
+    fn open_with(
+        dir: &Path,
+        remove_dir: &dyn Fn(&Path) -> io::Result<()>,
+    ) -> anyhow::Result<Index> {
         fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
         let (schema, fields) = build_schema();
         let index_dir = dir.join(INDEX_DIR);
@@ -326,7 +338,7 @@ impl Index {
                 if let Some(opened) = open_existing(dir, &schema)? {
                     break opened;
                 }
-                break recreate(dir, &index_dir, schema)?;
+                break recreate(dir, &index_dir, schema, remove_dir)?;
             }
             anyhow::ensure!(
                 Instant::now() < deadline,
@@ -556,11 +568,14 @@ fn needs_rebuild(e: &TantivyError) -> bool {
     )
 }
 
-/// Wipes and recreates the index; the caller must hold `writer.lock`.
+/// Wipes (with `remove_dir`) and recreates the index; the caller must hold
+/// `writer.lock`. `state.json` is removed first and written last, so a failure
+/// at any step leaves an index the next open rebuilds.
 fn recreate(
     dir: &Path,
     index_dir: &Path,
     schema: Schema,
+    remove_dir: &dyn Fn(&Path) -> io::Result<()>,
 ) -> anyhow::Result<(tantivy::Index, IndexReader)> {
     // Without a state file, concurrent opens wait for the lock instead of
     // reading the index while it is being replaced.
@@ -569,8 +584,13 @@ fn recreate(
         _ => {}
     }
     if index_dir.exists() {
-        fs::remove_dir_all(index_dir)
-            .with_context(|| format!("removing {}", index_dir.display()))?;
+        remove_dir(index_dir).map_err(|e| {
+            anyhow::anyhow!(
+                "cannot rebuild the index in {}: another hound process is using the index; \
+                 close it and retry ({e})",
+                index_dir.display()
+            )
+        })?;
     }
     fs::create_dir_all(index_dir)?;
     let opened = with_reader(tantivy::Index::create_in_dir(index_dir, schema)?)?;
@@ -637,4 +657,43 @@ fn write_state(dir: &Path, state: &State) -> anyhow::Result<()> {
         let _ = fs::remove_file(&tmp);
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rebuild_reports_index_in_use_when_removal_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        drop(Index::open(dir.path()).unwrap());
+        // A stale schema version forces a rebuild.
+        fs::write(
+            dir.path().join(STATE_FILE),
+            r#"{"schema_version":0,"heartbeat":0}"#,
+        )
+        .unwrap();
+
+        let in_use = |_: &Path| -> io::Result<()> {
+            Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "file in use by another process",
+            ))
+        };
+        let err = match Index::open_with(dir.path(), &in_use) {
+            Ok(_) => panic!("open succeeded although removal failed"),
+            Err(e) => e.to_string(),
+        };
+        assert!(
+            err.contains("another hound process is using the index"),
+            "{err}"
+        );
+        assert!(err.contains("close it and retry"), "{err}");
+        assert!(!dir.path().join(STATE_FILE).exists());
+
+        // The next open, once removal works, rebuilds.
+        Index::open(dir.path()).unwrap();
+        let state = read_state(dir.path()).unwrap().unwrap();
+        assert_eq!(state.schema_version, SCHEMA_VERSION);
+    }
 }
