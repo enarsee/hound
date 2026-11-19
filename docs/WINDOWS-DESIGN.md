@@ -184,13 +184,16 @@ Enter opens the selected entry, so a pasted newline could focus or resume
 something the user did not choose. On every platform, hound treats key
 presses that arrive as a burst as pasted text: within one batch of events
 already waiting, a run of three or more printable presses, and any Enter that
-is followed by more printable input, is pasted text — printable characters
+comes before the batch's last printable press (whatever keys lie between), is
+pasted text — printable characters
 join the query and those Enters do nothing. A lone Enter, or one or two
 characters followed by Enter, is delivered as typed; two Enters in one batch
 are both delivered, so a confirming second Enter still works. Accepted costs,
 both failing safe (nothing opens): a fast typist whose three characters and
 Enter land in one batch while the popup is busy has that Enter dropped, and a
-paste split across two batches can deliver the Enter of a short final line. The burst rule
+paste split across two batches can deliver the Enter of a short final line;
+and once a batch has contained pasted text, an Enter later in that same batch
+(for example after an arrow key) is not delivered either. The burst rule
 is a pure function over a batch of events, tested everywhere. Failure to
 enable bracketed paste is ignored; failure to enter the alternate screen or
 raw mode remains an error.
