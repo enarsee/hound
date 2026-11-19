@@ -48,7 +48,8 @@ pub fn exchange<S: Read + Write>(
 }
 
 /// Runs `f` on a helper thread and waits at most `limit` for it. On timeout the thread is
-/// abandoned; a detached thread does not keep the process alive at exit.
+/// abandoned; a detached thread does not keep the process alive at exit. A helper that ends
+/// without a result (it panicked) is reported separately from a timeout.
 pub fn with_time_limit<T: Send + 'static>(
     limit: Duration,
     f: impl FnOnce() -> anyhow::Result<T> + Send + 'static,
@@ -58,12 +59,22 @@ pub fn with_time_limit<T: Send + 'static>(
         // The receiver is gone if the caller already gave up.
         let _ = tx.send(f());
     });
-    rx.recv_timeout(limit).unwrap_or_else(|_| {
-        Err(anyhow::anyhow!(
-            "herdr did not answer within {}s",
-            limit.as_secs()
-        ))
-    })
+    match rx.recv_timeout(limit) {
+        Ok(result) => result,
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            bail!("herdr did not answer within {}", describe_limit(limit))
+        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => bail!("herdr call failed unexpectedly"),
+    }
+}
+
+/// `10s` for whole seconds, otherwise the `Duration`'s own form such as `50ms`.
+fn describe_limit(limit: Duration) -> String {
+    if limit.subsec_nanos() == 0 {
+        format!("{}s", limit.as_secs())
+    } else {
+        format!("{limit:?}")
+    }
 }
 
 /// Connects to `HERDR_SOCKET_PATH`; `None` if it is unset or the connection fails.
@@ -95,19 +106,29 @@ impl SocketConnection {
     }
 }
 
-/// herdr's named pipe. Named pipes have no receive timeout (herdr's own client treats
-/// `Unsupported` from `set_recv_timeout` as normal), so each call connects, writes and reads on
-/// a helper thread under one overall limit; connecting is therefore deferred to [`Self::call`].
+/// herdr's named pipe, connected as herdr's `connect_local_stream` does. Named pipes have no
+/// receive timeout (herdr's own client treats `Unsupported` from `set_recv_timeout` as normal),
+/// so connecting and each call run on a helper thread, each under the 10-second limit.
 #[cfg(windows)]
 pub struct SocketConnection {
-    name: String,
+    stream: std::sync::Arc<interprocess::local_socket::Stream>,
 }
 
 #[cfg(windows)]
 impl SocketConnection {
     pub fn connect(path: &Path) -> anyhow::Result<SocketConnection> {
+        let name = path.to_string_lossy().to_string();
+        let stream = with_time_limit(TIMEOUT, move || {
+            use interprocess::local_socket::{GenericNamespaced, Stream, prelude::*};
+
+            let pipe = name
+                .clone()
+                .to_ns_name::<GenericNamespaced>()
+                .with_context(|| format!("naming the pipe {name}"))?;
+            Stream::connect(pipe).with_context(|| format!("connecting to {name}"))
+        })?;
         Ok(SocketConnection {
-            name: path.to_string_lossy().to_string(),
+            stream: std::sync::Arc::new(stream),
         })
     }
 
@@ -115,18 +136,8 @@ impl SocketConnection {
     /// `error` response, a mismatched `id`, a closed connection or no answer within 10 seconds
     /// is an error.
     pub fn call(&mut self, request: &str) -> anyhow::Result<serde_json::Value> {
-        let name = self.name.clone();
+        let stream = std::sync::Arc::clone(&self.stream);
         let request = request.to_owned();
-        with_time_limit(TIMEOUT, move || {
-            use interprocess::local_socket::{GenericNamespaced, Stream, prelude::*};
-
-            // As herdr's `connect_local_stream` does.
-            let pipe = name
-                .clone()
-                .to_ns_name::<GenericNamespaced>()
-                .with_context(|| format!("naming the pipe {name}"))?;
-            let stream = Stream::connect(pipe).with_context(|| format!("connecting to {name}"))?;
-            exchange(&stream, &request)
-        })
+        with_time_limit(TIMEOUT, move || exchange(&*stream, &request))
     }
 }

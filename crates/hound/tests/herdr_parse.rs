@@ -296,6 +296,37 @@ fn time_limit_passes_errors_through() {
     assert!(format!("{err:#}").contains("boom"), "{err:#}");
 }
 
+#[test]
+fn time_limit_reports_a_failed_call_apart_from_a_timeout() {
+    let err = with_time_limit(Duration::from_secs(5), || -> anyhow::Result<()> {
+        panic!("helper thread failed")
+    })
+    .unwrap_err();
+    let message = format!("{err:#}");
+    assert!(message.contains("failed unexpectedly"), "{message}");
+    assert!(!message.contains("did not answer"), "{message}");
+}
+
+#[test]
+fn time_limit_names_a_sub_second_limit() {
+    let err = with_time_limit(Duration::from_millis(50), || {
+        std::thread::sleep(Duration::from_secs(5));
+        Ok(())
+    })
+    .unwrap_err();
+    assert_eq!(format!("{err:#}"), "herdr did not answer within 50ms");
+}
+
+#[test]
+fn time_limit_names_whole_seconds() {
+    let err = with_time_limit(Duration::from_secs(1), || {
+        std::thread::sleep(Duration::from_secs(5));
+        Ok(())
+    })
+    .unwrap_err();
+    assert_eq!(format!("{err:#}"), "herdr did not answer within 1s");
+}
+
 /// An in-memory stream: reads come from `response`, writes land in `request`.
 struct Duplex {
     response: Cursor<Vec<u8>>,
