@@ -839,8 +839,10 @@ fn bad_remote_targets_are_not_commands() {
 
 /// Serialises the stub tests: each writes an executable then spawns it, and a fork from
 /// another test while the script is open for writing would make exec fail (ETXTBSY).
+#[cfg(unix)]
 static STUB_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+#[cfg(unix)]
 const TAB_CREATED: &str = r#"{"id":"cli:tab:create","result":{"type":"tab_created",
     "tab":{"tab_id":"w2:t9","workspace_id":"w2","number":9,"label":"9","focused":true,"pane_count":1,"agent_status":"unknown"},
     "root_pane":{"pane_id":"w2:p9","tab_id":"w2:t9","workspace_id":"w2","terminal_id":"t","focused":true,"agent_status":"unknown","revision":0}}}"#;
@@ -849,6 +851,7 @@ const TAB_CREATED: &str = r#"{"id":"cli:tab:create","result":{"type":"tab_create
 /// `calls` (tab-separated, one invocation per line) and prints `<arg3>_<arg4>.json` from the
 /// same directory when present, else an `ok` envelope. With `fail_focus`, `agent focus`
 /// exits 1 with a message on stderr.
+#[cfg(unix)]
 fn stub(fail_focus: bool) -> (tempfile::TempDir, PathBuf) {
     use std::os::unix::fs::PermissionsExt;
     let dir = tempfile::tempdir().unwrap();
@@ -882,6 +885,7 @@ fn stub(fail_focus: bool) -> (tempfile::TempDir, PathBuf) {
 }
 
 /// The argument vectors the stub in `dir` was run with, in order.
+#[cfg(unix)]
 fn calls(dir: &tempfile::TempDir) -> Vec<Vec<String>> {
     std::fs::read_to_string(dir.path().join("calls"))
         .unwrap_or_default()
@@ -894,10 +898,12 @@ fn calls(dir: &tempfile::TempDir) -> Vec<Vec<String>> {
         .collect()
 }
 
+#[cfg(unix)]
 fn prefixed(label: &str, parts: &[&str]) -> Vec<String> {
     machine_args(label, &strings(parts))
 }
 
+#[cfg(unix)]
 #[test]
 fn stub_records_executed_vectors() {
     use hound_core::host::Host;
@@ -959,6 +965,7 @@ fn stub_records_executed_vectors() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn stub_start_agent_ok_when_trailing_focus_fails() {
     use hound_core::host::Host;
@@ -983,6 +990,7 @@ fn stub_start_agent_ok_when_trailing_focus_fails() {
     assert!(!msg.to_lowercase().contains("retry"), "{msg}");
 }
 
+#[cfg(unix)]
 #[test]
 fn stub_bad_remote_target_runs_nothing() {
     use hound_core::host::Host;

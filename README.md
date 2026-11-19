@@ -274,7 +274,80 @@ Deleting the directory is safe; the next run rebuilds it.
 named by `HERDR_BIN_PATH` (or `herdr` on `PATH`). Outside herdr there are
 no live panes: every session is listed as closed, and Enter replaces the hound
 process with the resumed session (`claude --resume …`, `pi --session …`) in
-the session's directory, in the same terminal.
+the session's directory, in the same terminal (on Windows hound runs it as a
+child instead; see [Windows](#windows)).
+
+## Windows
+
+**Status:** hound is built and its test suite run on Windows in CI
+(`windows-latest`), but it has not yet been run by hand on a Windows machine,
+and its herdr integration (the popup, focusing panes over herdr's named pipe,
+resuming in a new tab) has not been tried at all. Expect rough edges.
+
+### Building on Windows
+
+Two dependencies (`ring` and `zstd-sys`) compile C code, so besides Rust from
+[rustup](https://rustup.rs) you need the Microsoft C++ build tools (the
+"Desktop development with C++" workload of Visual Studio or of the Build
+Tools for Visual Studio). In a Developer PowerShell:
+
+```powershell
+git clone https://github.com/enarsee/hound; cd hound
+cargo build --release          # binary at target\release\hound.exe
+```
+
+### Where hound keeps its files on Windows
+
+| What                 | Windows default                    |
+|----------------------|------------------------------------|
+| config               | `%APPDATA%\hound\config.toml`      |
+| index and state      | `%LOCALAPPDATA%\hound`             |
+| Claude Code sessions | `%USERPROFILE%\.claude\projects`   |
+| pi sessions          | `%USERPROFILE%\.pi\agent\sessions` |
+
+`HOUND_CONFIG` and `HOUND_STATE_DIR` override the first two, as on Unix, and a
+leading `~` in `claude_root` or `pi_root` is your profile folder (for example
+`C:\Users\alice`). The two session locations are where the agents are
+expected to keep their files on Windows; that has not been confirmed yet.
+
+When the index has to be rebuilt while another hound has it open, Windows
+does not let the old index be deleted; hound then stops with
+`another hound process is using the index; close it and retry`.
+
+### Differences from Linux and macOS
+
+- `hound install` prints the bindings for `%APPDATA%\herdr\config.toml`.
+  Each `command` wraps the quoted path to `hound.exe` in one more pair of
+  quotes, because herdr runs it through `cmd.exe`, which strips the outer
+  pair. A path to `hound.exe` containing `"` or `%` is refused.
+- `hound serve` and `hound install --serve` are not available: they exit
+  with `hound serve is not supported on Windows`. A Windows machine can
+  still search another machine running `hound serve` through a `[[remote]]`
+  block.
+- Inside herdr, hound talks to herdr over its named pipe, and falls back to
+  the `herdr` command when the pipe cannot be connected.
+- Outside herdr, Enter starts the agent (found on `PATH` using `PATHEXT`, so
+  a `claude.cmd` shim works) as a child of hound in the same window, instead
+  of replacing hound. Ctrl+C goes to the agent while hound waits; hound then
+  exits with the agent's exit code.
+
+### Trying it on a real Windows machine
+
+These checks would move Windows support out of "tests only", in this order:
+
+1. `cargo build --release` and `cargo test --workspace` succeed.
+2. `hound index` finds Claude and pi sessions (confirms the session
+   locations above).
+3. `hound ui` in a plain PowerShell window: search, then Enter on a closed
+   session resumes it in that window.
+4. Inside herdr: paste `hound install`'s bindings into
+   `%APPDATA%\herdr\config.toml`, run `herdr server reload-config`, press
+   `prefix+space`: the popup opens and live agents show with workspace and
+   tab.
+5. Enter on a live agent focuses it; Enter on a live plain shell pane
+   focuses it (this one needs the named pipe).
+6. Enter on a closed session opens a new tab and resumes it.
+7. Optional: a `[[remote]]` block pointing at a Linux `hound serve`.
 
 ## Advanced: several machines
 
@@ -459,7 +532,11 @@ use they have had.
   `herdr --machine`, whether the client's view follows after a remote resume,
   and whether the list commands through `--machine` return the same shapes as
   locally.
-- Building and running on macOS. hound has only been compiled on Linux.
+- Running on macOS. hound is built and tested on macOS in CI, but has only
+  been run by hand on Linux.
+- Everything under [Windows](#windows): it is built and tested on Windows in
+  CI only, and nothing there, including the herdr integration, has been run
+  by hand.
 - The herdr plugin manifest (`herdr-plugin.toml`): an action opening a popup
   pane through `herdr plugin pane open`.
 - Running outside herdr: opening, typing and closing were tried; Enter handing
