@@ -21,6 +21,10 @@ clap.workspace = true
 # geteuid, for the token file ownership check.
 libc = "0.2"
 
+[target.'cfg(windows)'.dependencies]
+# SetConsoleCtrlHandler, so the resumed agent alone receives Ctrl+C.
+windows-sys = { version = "0.61", features = ["Win32_System_Console"] }
+
 [dev-dependencies]
 tempfile.workspace = true
 ureq.workspace = true

@@ -5,5 +5,6 @@ pub mod host;
 pub mod index;
 pub mod model;
 pub mod open;
+pub mod platform;
 pub mod remote;
 pub mod search;

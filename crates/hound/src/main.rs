@@ -10,6 +10,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use clap::{Parser, Subcommand};
 use hound::herdr::CliHerdr;
+use hound::program::resolve_on_this_machine;
 use hound::text::printable;
 use hound::ui;
 use hound_core::config::{self, Config};
@@ -155,7 +156,9 @@ fn run_ui(scope: Scope) -> Outcome {
     }
 }
 
-/// Replaces this process with `argv` run in `cwd`; returns only on failure.
+/// Runs `argv` in `cwd` in place of hound (on Windows, as a child whose exit code hound
+/// exits with); returns only on failure. `argv[0]` is looked up with `PATH` (and `PATHEXT`),
+/// falling back to the bare name so a failure reports the system's own error.
 fn exec_in(cwd: &str, argv: &[String]) -> Failure {
     let Some((program, args)) = argv.split_first() else {
         return Failure("nothing to run".to_string());
@@ -163,19 +166,42 @@ fn exec_in(cwd: &str, argv: &[String]) -> Failure {
     if let Err(e) = env::set_current_dir(cwd) {
         return Failure(format!("changing directory to {cwd}: {e}"));
     }
-    exec(program, args)
+    let resolved = resolve_on_this_machine(program).unwrap_or_else(|| PathBuf::from(program));
+    exec(program, &resolved, args)
 }
 
+/// Replaces this process with `path` run with `args`; `program` names it in an error.
 #[cfg(unix)]
-fn exec(program: &str, args: &[String]) -> Failure {
+fn exec(program: &str, path: &Path, args: &[String]) -> Failure {
     use std::os::unix::process::CommandExt;
-    let e = std::process::Command::new(program).args(args).exec();
+    let e = std::process::Command::new(path)
+        .arg0(program)
+        .args(args)
+        .exec();
     Failure(format!("running {program}: {e}"))
 }
 
-#[cfg(not(unix))]
-fn exec(program: &str, args: &[String]) -> Failure {
-    match std::process::Command::new(program).args(args).status() {
+/// Runs `path` with `args` as a child and exits with its exit code; `program` names it in
+/// an error. While the child runs hound ignores Ctrl+C and Ctrl+Break, which reach only
+/// the child, so hound does not exit underneath it.
+#[cfg(windows)]
+fn exec(program: &str, path: &Path, args: &[String]) -> Failure {
+    use windows_sys::Win32::System::Console::{
+        CTRL_BREAK_EVENT, CTRL_C_EVENT, SetConsoleCtrlHandler,
+    };
+
+    /// Swallows Ctrl+C and Ctrl+Break in hound; other events get the default handling.
+    /// A handler is registered rather than `SetConsoleCtrlHandler(None, TRUE)` because that
+    /// ignore flag is inherited by child processes, and the agent must still see Ctrl+C.
+    unsafe extern "system" fn ignore_interrupt(ctrl_type: u32) -> windows_sys::core::BOOL {
+        (ctrl_type == CTRL_C_EVENT || ctrl_type == CTRL_BREAK_EVENT).into()
+    }
+
+    // SAFETY: registers a handler that touches no state; it stays registered until exit.
+    unsafe {
+        SetConsoleCtrlHandler(Some(ignore_interrupt), 1);
+    }
+    match std::process::Command::new(path).args(args).status() {
         Ok(status) => std::process::exit(status.code().unwrap_or(1)),
         Err(e) => Failure(format!("running {program}: {e}")),
     }

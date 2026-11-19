@@ -19,6 +19,8 @@ use hound_core::host::{Host, LivePane};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 
+use crate::program::resolve_on_this_machine;
+
 mod socket;
 
 pub use socket::{SocketConnection, request_line};
@@ -266,7 +268,8 @@ pub fn read_args(pane_id: &str, lines: u32) -> Vec<String> {
 
 /// Whether hound runs inside herdr, and which herdr binary to drive: `Some(binary)` when
 /// `HERDR_ENV` is `1` or `HERDR_SOCKET_PATH` is non-empty, and a binary is known. The
-/// binary is `HERDR_BIN_PATH` when non-empty, else whatever `find_on_path("herdr")` finds.
+/// binary is `HERDR_BIN_PATH` when non-empty, else whatever `find_on_path("herdr")` finds
+/// ([`CliHerdr::detect`] passes [`resolve_on_this_machine`]).
 ///
 /// herdr documents `HERDR_SOCKET_PATH` and `HERDR_BIN_PATH` for `[[keys.command]]`
 /// popups, and those plus `HERDR_ENV=1` for plugin panes and panes generally.
@@ -299,7 +302,7 @@ impl CliHerdr {
             env::var_os("HERDR_ENV").as_deref(),
             env::var_os("HERDR_SOCKET_PATH").as_deref(),
             env::var_os("HERDR_BIN_PATH").as_deref(),
-            find_on_path,
+            resolve_on_this_machine,
         )
         .map(|bin| CliHerdr { bin })
     }
@@ -473,26 +476,6 @@ fn single_line(err: anyhow::Error) -> anyhow::Error {
 
 fn strings(parts: &[&str]) -> Vec<String> {
     parts.iter().map(|s| s.to_string()).collect()
-}
-
-/// The first executable `program` in `PATH`.
-fn find_on_path(program: &str) -> Option<PathBuf> {
-    let paths = env::var_os("PATH")?;
-    env::split_paths(&paths)
-        .map(|dir| dir.join(program))
-        .find(|p| is_executable(p))
-}
-
-#[cfg(unix)]
-fn is_executable(path: &Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-    path.metadata()
-        .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
-}
-
-#[cfg(not(unix))]
-fn is_executable(path: &Path) -> bool {
-    path.is_file()
 }
 
 /// Success unless `out` is a JSON object carrying an `error`; anything else, including empty

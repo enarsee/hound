@@ -3,6 +3,7 @@
 pub use hound_core;
 
 pub mod herdr;
+pub mod program;
 pub mod text;
 pub mod ui;
 
