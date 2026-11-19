@@ -105,6 +105,7 @@ fn stderr(out: &Output) -> String {
 }
 
 /// Every path under `dir`, sorted, with its size.
+#[cfg(unix)]
 fn listing(dir: &Path) -> Vec<(PathBuf, u64)> {
     let mut out = Vec::new();
     let mut stack = vec![dir.to_path_buf()];
