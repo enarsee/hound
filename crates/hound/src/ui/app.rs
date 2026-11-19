@@ -34,7 +34,7 @@ pub enum Input {
     Other(Event),
 }
 
-/// Key presses in a burst that make it a paste.
+/// Consecutive printable key presses that make a segment a paste.
 const BURST_MIN: usize = 3;
 
 /// A key press of a character typed without Ctrl or Alt (Shift is fine).
@@ -52,60 +52,128 @@ fn printable(key: &KeyEvent) -> Option<char> {
     }
 }
 
-/// A key release or repeat: inside a burst it neither counts nor ends it.
+/// A key release or repeat: inside a segment it neither counts nor ends it.
 fn not_a_press(event: &Event) -> bool {
     matches!(event, Event::Key(key) if key.kind != KeyEventKind::Press)
 }
 
+/// A segment's key presses: `Some(c)` a printable character, `None` Enter.
+/// `None` for an event that cannot be part of a segment.
+fn segment_press(event: &Event) -> Option<Option<char>> {
+    let Event::Key(key) = event else {
+        return None;
+    };
+    if key.kind != KeyEventKind::Press {
+        return None;
+    }
+    match printable(key) {
+        Some(c) => Some(Some(c)),
+        None if key.code == KeyCode::Enter => Some(None),
+        None => None,
+    }
+}
+
+/// How many events from the start of `events` form a segment: printable
+/// and Enter presses, with the releases and repeats among and after them. A
+/// segment starts at a press; 0 if `events` does not start with one.
+fn segment_len(events: &[Event]) -> usize {
+    if events.first().and_then(segment_press).is_none() {
+        return 0;
+    }
+    events
+        .iter()
+        .take_while(|event| not_a_press(event) || segment_press(event).is_some())
+        .count()
+}
+
+/// The segment's presses, releases and repeats left out.
+fn presses(segment: &[Event]) -> Vec<Option<char>> {
+    segment.iter().filter_map(segment_press).collect()
+}
+
+/// Whether a segment's presses are pasted text: at least [`BURST_MIN`]
+/// printable characters in a row, or an Enter directly followed by a
+/// printable character.
+fn looks_pasted(presses: &[Option<char>]) -> bool {
+    let run = presses
+        .split(Option::is_none)
+        .any(|chars| chars.len() >= BURST_MIN);
+    run || presses
+        .windows(2)
+        .any(|pair| pair[0].is_none() && pair[1].is_some())
+}
+
+/// The text of pasted presses: each Enter a space between the characters
+/// around it; Enters at the start or end are dropped.
+fn pasted_text(presses: &[Option<char>]) -> String {
+    let mut text = String::new();
+    let mut enters = 0;
+    for press in presses {
+        match press {
+            Some(c) => {
+                if !text.is_empty() {
+                    text.extend(std::iter::repeat_n(' ', enters));
+                }
+                enters = 0;
+                text.push(*c);
+            }
+            None => enters += 1,
+        }
+    }
+    text
+}
+
 /// Interprets a batch of terminal events read without waiting, in order.
 /// Some terminals (crossterm on Windows) report pasted text as separate key
-/// presses, a line break as Enter. So a run of at least three printable key
-/// presses is taken as pasted: the run and every printable character and
-/// Enter after it, up to the first other key or event, become one
-/// [`Input::Pasted`], each Enter a space between the characters around it
-/// (Enters at its end are dropped). Key releases and repeats within such a
-/// run are dropped; elsewhere every event passes through, a bracketed paste
-/// as [`Input::Pasted`] with its text unchanged.
+/// presses, a line break as Enter, and Enter opens the selected entry.
+///
+/// The batch is cut into segments: runs of printable presses (characters
+/// without Ctrl or Alt) and Enter presses, with any key releases and
+/// repeats among them; every other key or event ends a segment and passes
+/// through on its own. A segment is pasted if it has at least three
+/// printable presses in a row or an Enter directly followed by a printable
+/// press, or if an earlier segment of the batch was pasted (so a short line
+/// after a pasted Tab is still text). A pasted segment becomes one
+/// [`Input::Pasted`] (none if it holds only Enters): each Enter a space
+/// between the characters around it, Enters at its start or end dropped, its
+/// releases and repeats dropped. Other segments pass through as keys. A
+/// bracketed paste becomes [`Input::Pasted`] with its text unchanged.
+///
+/// Accepted costs, both failing safe (nothing opens): a fast typist whose
+/// three characters and Enter land in one batch (only when the popup's
+/// thread stalls) has that Enter dropped; a paste split across two batches
+/// can still deliver the Enter of a short last line.
 pub fn split_paste_bursts(batch: &[Event]) -> Vec<Input> {
     let mut inputs = Vec::new();
+    let mut pasting = false;
     let mut i = 0;
     while i < batch.len() {
-        let is_printable = |e: &Event| matches!(e, Event::Key(key) if printable(key).is_some());
-        let presses = batch[i..]
-            .iter()
-            .filter(|e| !not_a_press(e))
-            .take_while(|e| is_printable(e))
-            .count();
-        if is_printable(&batch[i]) && presses >= BURST_MIN {
-            let mut text = String::new();
-            let mut enters = 0;
-            while let Some(event) = batch.get(i) {
-                match event {
-                    Event::Key(key) if key.kind == KeyEventKind::Press => {
-                        if let Some(c) = printable(key) {
-                            text.extend(std::iter::repeat_n(' ', enters));
-                            enters = 0;
-                            text.push(c);
-                        } else if key.code == KeyCode::Enter {
-                            enters += 1;
-                        } else {
-                            break;
-                        }
-                    }
-                    event if not_a_press(event) => {}
-                    _ => break,
-                }
-                i += 1;
-            }
-            inputs.push(Input::Pasted(text));
+        let len = segment_len(&batch[i..]);
+        if len == 0 {
+            inputs.push(match &batch[i] {
+                Event::Key(key) => Input::Key(*key),
+                Event::Paste(text) => Input::Pasted(text.clone()),
+                other => Input::Other(other.clone()),
+            });
+            i += 1;
             continue;
         }
-        inputs.push(match &batch[i] {
-            Event::Key(key) => Input::Key(*key),
-            Event::Paste(text) => Input::Pasted(text.clone()),
-            other => Input::Other(other.clone()),
-        });
-        i += 1;
+        let segment = &batch[i..i + len];
+        let presses = presses(segment);
+        if pasting || looks_pasted(&presses) {
+            pasting = true;
+            let text = pasted_text(&presses);
+            if !text.is_empty() {
+                inputs.push(Input::Pasted(text));
+            }
+        } else {
+            // A segment holds only key events.
+            inputs.extend(segment.iter().filter_map(|event| match event {
+                Event::Key(key) => Some(Input::Key(*key)),
+                _ => None,
+            }));
+        }
+        i += len;
     }
     inputs
 }

@@ -1648,10 +1648,10 @@ fn alt_chars_and_other_keys_end_a_burst_in_order() {
         vec![
             Input::Pasted("abc".to_string()),
             Input::Key(alt),
-            Input::Key(k(KeyCode::Enter)),
             Input::Pasted("defg".to_string()),
             Input::Key(k(KeyCode::Down)),
-            Input::Key(k(KeyCode::Char('h'))),
+            // After a pasted segment, the rest of the batch's text is pasted.
+            Input::Pasted("h".to_string()),
             Input::Other(Event::Resize(1, 1)),
         ]
     );
@@ -1689,8 +1689,7 @@ fn a_non_key_event_ends_a_burst() {
         vec![
             Input::Pasted("abc".to_string()),
             Input::Other(Event::FocusLost),
-            Input::Key(k(KeyCode::Char('d'))),
-            Input::Key(k(KeyCode::Enter)),
+            Input::Pasted("d".to_string()),
         ]
     );
 }
@@ -1729,4 +1728,135 @@ fn inputs_reach_the_app_in_order() {
         ]
     );
     assert_eq!(app.query, "ab");
+}
+
+fn events(text: &str) -> Vec<Event> {
+    text.chars()
+        .map(|c| match c {
+            '\n' => enter(),
+            '\t' => Event::Key(k(KeyCode::Tab)),
+            c => ch(c),
+        })
+        .collect()
+}
+
+fn feed(app: &mut App, batch: &[Event]) -> Vec<Effect> {
+    split_paste_bursts(batch)
+        .iter()
+        .map(|input| app.on_input(input))
+        .collect()
+}
+
+fn no_open(effects: &[Effect]) -> bool {
+    !effects.iter().any(|e| matches!(e, Effect::Open { .. }))
+}
+
+#[test]
+fn paste_starting_with_a_newline_does_not_open() {
+    let batch = [enter(), ch('a'), ch('b'), ch('c')];
+    // The leading Enter is dropped, not turned into a space.
+    assert_eq!(
+        split_paste_bursts(&batch),
+        vec![Input::Pasted("abc".to_string())]
+    );
+    let mut app = app_with_hits(3);
+    let effects = feed(&mut app, &batch);
+    assert!(no_open(&effects), "{effects:?}");
+    assert_eq!(app.query, "abc");
+}
+
+#[test]
+fn paste_with_a_short_first_line_does_not_open() {
+    let batch = events("ab\ncdef");
+    assert_eq!(
+        split_paste_bursts(&batch),
+        vec![Input::Pasted("ab cdef".to_string())]
+    );
+    let mut app = app_with_hits(3);
+    let effects = feed(&mut app, &batch);
+    assert!(no_open(&effects), "{effects:?}");
+    assert_eq!(app.query, "ab cdef");
+}
+
+#[test]
+fn short_line_after_a_pasted_tab_does_not_open() {
+    let batch = events("abc\tde\n");
+    assert_eq!(
+        split_paste_bursts(&batch),
+        vec![
+            Input::Pasted("abc".to_string()),
+            Input::Key(k(KeyCode::Tab)),
+            Input::Pasted("de".to_string()),
+        ]
+    );
+    let mut app = app_with_hits(3);
+    let effects = feed(&mut app, &batch);
+    assert!(no_open(&effects), "{effects:?}");
+    assert_eq!(app.scope, Scope::All.next());
+    assert_eq!(app.query, "abcde");
+}
+
+#[test]
+fn double_enter_in_one_batch_is_two_keys() {
+    let batch = [enter(), enter()];
+    assert_eq!(
+        split_paste_bursts(&batch),
+        vec![Input::Key(k(KeyCode::Enter)), Input::Key(k(KeyCode::Enter))]
+    );
+    // The first Enter opens and the open asks for confirmation; the second
+    // Enter confirms.
+    let inputs = split_paste_bursts(&batch);
+    let mut app = app_with_hits(3);
+    assert_eq!(
+        app.on_input(&inputs[0]),
+        Effect::Open {
+            hit: 0,
+            confirmed: false
+        }
+    );
+    app.begin_open();
+    assert_eq!(
+        app.on_outcome(OpenOutcome::NeedsConfirm("sure?".to_string())),
+        None
+    );
+    assert_eq!(
+        app.on_input(&inputs[1]),
+        Effect::Open {
+            hit: 0,
+            confirmed: true
+        }
+    );
+}
+
+#[test]
+fn enter_press_and_release_open_once() {
+    let batch = [enter(), released(&enter())];
+    let mut app = app_with_hits(3);
+    let effects = feed(&mut app, &batch);
+    assert_eq!(
+        effects,
+        vec![
+            Effect::Open {
+                hit: 0,
+                confirmed: false
+            },
+            Effect::None
+        ]
+    );
+}
+
+#[test]
+fn a_burst_does_not_complete_a_confirmation() {
+    let mut app = app_with_hits(3);
+    app.ask_confirm("sure?".to_string());
+    let effects = feed(&mut app, &events("ab\ncd\n"));
+    assert!(no_open(&effects), "{effects:?}");
+    // The paste disarmed the confirmation: a later Enter starts over.
+    assert_eq!(
+        app.on_key(k(KeyCode::Enter)),
+        Effect::Open {
+            hit: 0,
+            confirmed: false
+        }
+    );
 }
