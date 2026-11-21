@@ -7,10 +7,21 @@ set -euo pipefail
 
 remote=${1:-origin}
 
-if ! git ls-remote --exit-code --heads "$remote" beta > /dev/null; then
-  echo "back-merge: $remote has no beta branch; nothing to do"
-  exit 0
-fi
+# ls-remote --exit-code: 2 means the remote answered and has no beta branch;
+# anything else non-zero (authentication, network) is a failure.
+status=0
+git ls-remote --exit-code --heads "$remote" beta > /dev/null || status=$?
+case $status in
+  0) ;;
+  2)
+    echo "back-merge: $remote has no beta branch; nothing to do"
+    exit 0
+    ;;
+  *)
+    echo "back-merge: cannot read $remote (git ls-remote exit $status)" >&2
+    exit 1
+    ;;
+esac
 
 git fetch -q "$remote" +refs/heads/main:refs/back-merge/main +refs/heads/beta:refs/back-merge/beta
 git checkout -q -B beta refs/back-merge/beta

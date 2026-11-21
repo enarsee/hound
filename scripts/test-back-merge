@@ -55,3 +55,10 @@ setup nobeta
 git push -q origin --delete beta
 "$root/scripts/back-merge" origin > /dev/null || fail "nobeta: exited non-zero"
 echo "ok: no beta branch is a no-op"
+
+# Unreachable remote (stands in for a token or network failure): must fail,
+# not pass as "no beta branch".
+if "$root/scripts/back-merge" "$tmp/missing.git" > /dev/null 2>&1; then
+  fail "unreachable remote: exited zero"
+fi
+echo "ok: an unreachable remote fails"

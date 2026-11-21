@@ -19,8 +19,10 @@ permissions:
   issues: write # semantic-release comments on released issues
   pull-requests: write # and on released pull requests
 
+# One queue for both branches: a main run's back-merge pushes beta, so it must
+# not overlap a beta release.
 concurrency:
-  group: release-${{ github.event.workflow_run.head_branch }}
+  group: release
   cancel-in-progress: false
 
 jobs:
@@ -31,7 +33,10 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.workflow_run.head_branch }}
+          # The commit CI tested. If the branch has moved on since, semantic-
+          # release sees it is behind and skips; the newer commit's own green
+          # CI run releases it.
+          ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0
           # semantic-release authenticates with GITHUB_TOKEN itself.
           persist-credentials: false
@@ -48,10 +53,14 @@ jobs:
       - name: Install release tooling
         run: npm ci --ignore-scripts
 
+      # Under workflow_run, GITHUB_REF names the default branch whatever branch
+      # CI ran on; semantic-release reads its branch from GITHUB_REF, so name
+      # the branch that was pushed, or a beta run would release as main.
       - name: Release
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: npx semantic-release
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+        run: GITHUB_REF="refs/heads/${HEAD_BRANCH}" npx semantic-release
 
       - name: Merge main back into beta
         if: github.event.workflow_run.head_branch == 'main'
