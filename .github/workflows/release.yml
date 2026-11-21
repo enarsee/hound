@@ -1,64 +1,65 @@
 name: Release
 
-# A version tag (pushed by `cargo release … --execute`) becomes a GitHub
-# release with notes generated from the commits since the previous tag.
+# Every green push to main publishes vX.Y.Z; every green push to beta publishes
+# vX.Y.Z-beta.N. semantic-release (.releaserc.json) picks the version from the
+# commit messages, writes it with scripts/set-version, commits, tags and
+# creates the GitHub release. A release on main is then merged back into beta.
+#
+# GitHub only runs workflow_run workflows from the default branch's copy of
+# this file. Pushes made here with the built-in token start no workflows, so
+# the release commit and the back-merge cannot trigger another release.
 on:
-  push:
-    tags: ['v[0-9]+.[0-9]+.[0-9]+']
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main, beta]
 
 permissions:
-  contents: write
+  contents: write # release commit, tag, back-merge
+  issues: write # semantic-release comments on released issues
+  pull-requests: write # and on released pull requests
+
+concurrency:
+  group: release-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
 
 jobs:
   release:
+    # Only after CI passed on a push (never a pull request).
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          persist-credentials: false
-          # Full history and tags, for the commit list in the release notes.
+          ref: ${{ github.event.workflow_run.head_branch }}
           fetch-depth: 0
+          # semantic-release authenticates with GITHUB_TOKEN itself.
+          persist-credentials: false
 
-      # The tag must name the version that Cargo.toml and herdr-plugin.toml
-      # carry, or the release would describe a different build.
-      - name: Check the tag matches the version
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 26
+          cache: npm
+
+      # scripts/set-version checks Cargo.lock with cargo.
+      - name: Install toolchain
+        run: rustup toolchain install
+
+      - name: Install release tooling
+        run: npm ci --ignore-scripts
+
+      - name: Release
         env:
-          TAG: ${{ github.ref_name }}
-        run: |
-          python3 - <<'EOF'
-          import os, sys, tomllib
-          tag = os.environ["TAG"]
-          want = tag.removeprefix("v")
-          with open("Cargo.toml", "rb") as f:
-              cargo = tomllib.load(f)["workspace"]["package"]["version"]
-          with open("herdr-plugin.toml", "rb") as f:
-              plugin = tomllib.load(f)["version"]
-          if cargo != want or plugin != want:
-              sys.exit(f"tag {tag} does not match Cargo.toml {cargo} / herdr-plugin.toml {plugin}")
-          print(f"{tag}: Cargo.toml and herdr-plugin.toml agree")
-          EOF
+          GITHUB_TOKEN: ${{ github.token }}
+        run: npx semantic-release
 
-      # Commits go straight to main, so GitHub's generated notes (built from
-      # merged pull requests) would be empty: list the commits instead.
-      - name: Write the release notes
-        env:
-          GH_REPO: ${{ github.repository }}
-          TAG: ${{ github.ref_name }}
-        run: |
-          prev=$(git describe --tags --abbrev=0 --match 'v[0-9]*.[0-9]*.[0-9]*' "$TAG^" 2>/dev/null || true)
-          {
-            echo "## Changes"
-            echo
-            git log --no-merges --pretty='- %s (%h)' "${prev:+$prev..}$TAG" | grep -v -- '^- chore: release v' || true
-            if [ -n "$prev" ]; then
-              echo
-              echo "Full diff: https://github.com/$GH_REPO/compare/$prev...$TAG"
-            fi
-          } > "$RUNNER_TEMP/notes.md"
-
-      - name: Create the GitHub release
+      - name: Merge main back into beta
+        if: github.event.workflow_run.head_branch == 'main'
         env:
           GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          TAG: ${{ github.ref_name }}
-        run: gh release create "$TAG" --verify-tag --notes-file "$RUNNER_TEMP/notes.md" --title "hound $TAG"
+          REPO: ${{ github.repository }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git"
+          scripts/back-merge origin

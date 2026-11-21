@@ -1,10 +1,11 @@
 name: CI
 
-# Branches other than main run CI through a pull request or by hand:
-# `gh workflow run CI --ref <branch>`.
+# Other branches run CI through a pull request or by hand:
+# `gh workflow run CI --ref <branch>`. A green push to main or beta starts the
+# Release workflow (release.yml).
 on:
   push:
-    branches: [main]
+    branches: [main, beta]
     tags: ['v*']
   pull_request:
   workflow_dispatch:
@@ -81,3 +82,9 @@ jobs:
 
       - name: Test scripts/set-version
         run: scripts/test-set-version
+
+      - name: Test scripts/back-merge
+        run: scripts/test-back-merge
+
+      - name: Check the release config parses
+        run: python3 -c 'import json; json.load(open(".releaserc.json"))'

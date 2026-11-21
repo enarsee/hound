@@ -536,32 +536,49 @@ HOUND_LIVE_TESTS=1 cargo test --workspace -- --ignored --nocapture
 ```
 
 CI (GitHub Actions) builds, tests, lints and checks formatting on Linux,
-macOS and Windows for pushes to `main`, version tags and pull requests. Run it
-on any other branch by hand with `gh workflow run CI --ref <branch>`.
+macOS and Windows for pushes to `main` and `beta`, version tags and pull
+requests, and tests the release scripts. Run it on any other branch by hand
+with `gh workflow run CI --ref <branch>`.
 
 ## Versions and releases
 
-hound follows semantic versioning while it is at 0.x: a minor release
-(0.2.0) brings features or breaking changes, a patch release (0.1.1) fixes.
-The version lives in `Cargo.toml` and is copied into `herdr-plugin.toml`; a
-test fails if the two differ. `hound --version` prints it.
+Releases are automatic. Work flows feature branch → `beta` → `main`:
 
-Releases are cut with [cargo-release](https://github.com/crate-ci/cargo-release)
-from a `main` whose CI is green:
+| Merge into | Publishes | Example |
+| --- | --- | --- |
+| `beta` | a beta (GitHub pre-release) | `v0.2.0-beta.1`, then `v0.2.0-beta.2` |
+| `main` | a release (GitHub latest release) | `v0.2.0` |
 
-```bash
-cargo install cargo-release
-cargo release minor              # dry run: shows the version bump, commit and tag
-cargo release minor --execute    # commits "chore: release vX.Y.Z", tags vX.Y.Z, pushes
-```
+After CI passes on a push to either branch, the Release workflow
+([semantic-release](https://semantic-release.gitbook.io/)) reads the commit
+messages since the last release and picks the version:
 
-One commit updates both version copies, and one tag `vX.Y.Z` marks it.
-Nothing is published to crates.io. Pushing the tag creates a GitHub release
-whose notes list the commits since the previous tag; the release is refused if
-the tag does not match the version in both files.
+- `feat:` → minor (0.1.0 → 0.2.0)
+- `fix:` or `perf:` → patch (0.1.0 → 0.1.1)
+- a breaking change (`feat!:`, or a `BREAKING CHANGE:` footer) → minor while
+  hound is at 0.x
+- anything else (`docs:`, `test:`, `ci:`, `build:`, `chore:`, `refactor:`) →
+  no release
 
-A fixed version can be installed through herdr's plugin system by naming the
-tag (the plugin path has not yet been tried in a live session; see
+It writes the version into `Cargo.toml`, `Cargo.lock` and `herdr-plugin.toml`
+(`scripts/set-version`), commits that as `chore(release): vX.Y.Z`, tags it
+`vX.Y.Z` and creates the GitHub release with notes from the commits. A test
+fails if `Cargo.toml` and `herdr-plugin.toml` disagree; `hound --version`
+prints the version. Nothing is published to crates.io.
+
+Rules for merging:
+
+- When squash-merging a pull request, its title becomes the commit message, so
+  it must follow the forms above.
+- Merge `beta` into `main` with a merge commit, not a squash.
+- After a release on `main`, the workflow merges `main` back into `beta` so the
+  next beta continues from it. If that merge conflicts, the workflow fails and
+  leaves `beta` unchanged: merge `main` into `beta` by hand and push.
+- The workflow pushes with GitHub's built-in token. If `main` or `beta` is
+  protected later, that token needs to be allowed to push.
+
+A version or a beta can be installed through herdr's plugin system by naming
+its tag (the plugin path has not yet been tried in a live session; see
 [Optional: herdr plugin](#optional-herdr-plugin)):
 
 ```bash
