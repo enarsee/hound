@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# Tests scripts/set-version on a copy of the version-bearing files.
+set -euo pipefail
+
+root=$(cd "$(dirname "$0")/.." && pwd)
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+cp "$root/Cargo.toml" "$root/Cargo.lock" "$root/herdr-plugin.toml" "$tmp/"
+for crate in hound hound-core; do
+  mkdir -p "$tmp/crates/$crate/src"
+  cp "$root/crates/$crate/Cargo.toml" "$tmp/crates/$crate/"
+  touch "$tmp/crates/$crate/src/lib.rs" "$tmp/crates/$crate/src/main.rs"
+done
+mkdir "$tmp/before"
+cp "$tmp/Cargo.toml" "$tmp/Cargo.lock" "$tmp/herdr-plugin.toml" "$tmp/before/"
+
+fail() { echo "FAIL: $*" >&2; exit 1; }
+
+# Lines that differ between the original and the rewritten file.
+changed() { diff "$tmp/before/$1" "$tmp/$1" | grep -c '^>' || true; }
+
+carries() { # file version
+  case $1 in
+    Cargo.toml) awk '/^\[workspace.package\]/{p=1;next} /^\[/{p=0} p && /^version = /' "$tmp/Cargo.toml" ;;
+    herdr-plugin.toml) grep '^version = ' "$tmp/herdr-plugin.toml" ;;
+    Cargo.lock) grep -A1 -E '^name = "hound(-core)?"$' "$tmp/Cargo.lock" | grep '^version = ' | sort -u ;;
+  esac | grep -qx "version = \"$2\"" || fail "$1 does not carry $2"
+}
+
+for version in 0.2.0-beta.1 0.2.0; do
+  "$root/scripts/set-version" "$version" "$tmp" > /dev/null || fail "set-version $version exited non-zero"
+  for f in Cargo.toml herdr-plugin.toml Cargo.lock; do carries "$f" "$version"; done
+  [ "$(changed Cargo.toml)" = 1 ] || fail "Cargo.toml: expected 1 changed line, got $(changed Cargo.toml)"
+  [ "$(changed herdr-plugin.toml)" = 1 ] || fail "herdr-plugin.toml: expected 1 changed line"
+  [ "$(changed Cargo.lock)" = 2 ] || fail "Cargo.lock: expected 2 changed lines, got $(changed Cargo.lock)"
+  grep -qx "$(grep '^min_herdr_version' "$tmp/before/herdr-plugin.toml")" "$tmp/herdr-plugin.toml" \
+    || fail "min_herdr_version changed"
+  cargo metadata --locked --format-version 1 --manifest-path "$tmp/Cargo.toml" > /dev/null \
+    || fail "Cargo.lock is stale after $version"
+  echo "ok: $version"
+done
+
+if "$root/scripts/set-version" > /dev/null 2>&1; then fail "no argument accepted"; fi
+echo "ok: no argument refused"
+if "$root/scripts/set-version" not-a-version "$tmp" > /dev/null 2>&1; then fail "bad version accepted"; fi
+carries Cargo.toml 0.2.0
+echo "ok: invalid version refused, files untouched"

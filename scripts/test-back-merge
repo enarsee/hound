@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# Tests scripts/back-merge against scratch repositories.
+set -euo pipefail
+
+root=$(cd "$(dirname "$0")/.." && pwd)
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.invalid
+export GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.invalid
+export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
+
+fail() { echo "FAIL: $*" >&2; exit 1; }
+
+# setup <name>: origin with main (version 0.1.0) and beta branched from it; a
+# clone at $work on main.
+setup() {
+  origin=$tmp/$1.git work=$tmp/$1
+  git init -q --bare -b main "$origin"
+  git clone -q "$origin" "$work" 2> /dev/null
+  cd "$work"
+  echo 'version = "0.1.0"' > v.toml
+  echo 'a' > notes
+  git add . && git commit -q -m "feat: start"
+  git push -q origin main
+  git push -q origin main:beta
+}
+
+# Beta behind main: main gets a release commit; beta gains an unrelated commit.
+setup behind
+git checkout -q -b b origin/beta
+echo 'b' > other && git add other && git commit -q -m "fix: on beta" && git push -q origin b:beta
+git checkout -q main
+echo 'version = "0.2.0"' > v.toml && git commit -q -am "chore(release): v0.2.0"
+git push -q origin main
+"$root/scripts/back-merge" origin > /dev/null || fail "behind: exited non-zero"
+git -C "$origin" merge-base --is-ancestor main beta || fail "behind: main not merged into beta"
+[ "$(git -C "$origin" show beta:v.toml)" = 'version = "0.2.0"' ] || fail "behind: beta lacks the release version"
+[ "$(git -C "$origin" show beta:other)" = b ] || fail "behind: beta lost its own commit"
+echo "ok: beta behind main is merged and pushed"
+
+# Conflict: both branches change the same line; origin beta must not move.
+setup conflict
+git checkout -q -b b origin/beta
+echo 'beta' > notes && git commit -q -am "fix: beta notes" && git push -q origin b:beta
+git checkout -q main
+echo 'main' > notes && git commit -q -am "fix: main notes" && git push -q origin main
+before=$(git -C "$origin" rev-parse beta)
+if "$root/scripts/back-merge" origin > /dev/null 2>&1; then fail "conflict: exited zero"; fi
+[ "$(git -C "$origin" rev-parse beta)" = "$before" ] || fail "conflict: origin beta moved"
+[ -z "$(git status --porcelain)" ] || fail "conflict: merge left in progress"
+echo "ok: a conflict fails and leaves beta untouched"
+
+# No beta branch: nothing to do.
+setup nobeta
+git push -q origin --delete beta
+"$root/scripts/back-merge" origin > /dev/null || fail "nobeta: exited non-zero"
+echo "ok: no beta branch is a no-op"
+
+# Unreachable remote (stands in for a token or network failure): must fail,
+# not pass as "no beta branch".
+if "$root/scripts/back-merge" "$tmp/missing.git" > /dev/null 2>&1; then
+  fail "unreachable remote: exited zero"
+fi
+echo "ok: an unreachable remote fails"

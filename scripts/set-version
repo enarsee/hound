@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# Writes a release version into the files that carry it:
+#   Cargo.toml         [workspace.package] version
+#   herdr-plugin.toml  top-level version
+#   Cargo.lock         the hound and hound-core entries
+# Usage: scripts/set-version <version> [repo-dir]
+# Run by semantic-release (.releaserc.json) before the release commit.
+set -euo pipefail
+
+version=${1:-}
+dir=${2:-$(cd "$(dirname "$0")/.." && pwd)}
+
+if ! [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+  echo "usage: scripts/set-version <version> [repo-dir]  (got '${version}')" >&2
+  exit 2
+fi
+
+# rewrite <file> <expected count> <awk program>: the awk program prints the
+# new file on stdout and the number of lines it replaced on fd 3. The file is
+# only replaced when that number is the expected one.
+rewrite() {
+  local file=$1 want=$2 prog=$3 out count
+  out=$(mktemp)
+  count=$(awk -v v="$version" "$prog" "$dir/$file" 3>&1 > "$out")
+  if [ "$count" != "$want" ]; then
+    rm -f "$out"
+    echo "set-version: expected $want version line(s) in $file, found $count" >&2
+    exit 1
+  fi
+  cat "$out" > "$dir/$file"
+  rm -f "$out"
+}
+
+rewrite Cargo.toml 1 '
+  /^\[/ { section = $0 }
+  section == "[workspace.package]" && /^version = "/ { $0 = "version = \"" v "\""; n++ }
+  { print }
+  END { print n + 0 > "/dev/fd/3" }'
+
+rewrite herdr-plugin.toml 1 '
+  /^\[/ { table = 1 }
+  !table && /^version = "/ { $0 = "version = \"" v "\""; n++ }
+  { print }
+  END { print n + 0 > "/dev/fd/3" }'
+
+rewrite Cargo.lock 2 '
+  /^name = "/ { ours = ($0 == "name = \"hound\"" || $0 == "name = \"hound-core\"") }
+  ours && /^version = "/ { $0 = "version = \"" v "\""; n++; ours = 0 }
+  { print }
+  END { print n + 0 > "/dev/fd/3" }'
+
+echo "version $version written to Cargo.toml, Cargo.lock and herdr-plugin.toml"

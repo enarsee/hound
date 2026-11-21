@@ -1,8 +1,14 @@
 name: CI
 
+# Other branches run CI through a pull request or by hand:
+# `gh workflow run CI --ref <branch>`. A green push to main or beta starts the
+# Release workflow (release.yml).
 on:
   push:
+    branches: [main, beta]
+    tags: ['v*']
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -62,3 +68,23 @@ jobs:
 
       - name: Check formatting
         run: cargo fmt --check
+
+  # The release scripts run on GitHub's Linux runner only.
+  scripts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install toolchain
+        run: rustup toolchain install
+
+      - name: Test scripts/set-version
+        run: scripts/test-set-version
+
+      - name: Test scripts/back-merge
+        run: scripts/test-back-merge
+
+      - name: Check the release config parses
+        run: python3 -c 'import json; json.load(open(".releaserc.json"))'

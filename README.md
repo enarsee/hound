@@ -535,6 +535,56 @@ is set, so `cargo test -- --include-ignored` alone stays off real data:
 HOUND_LIVE_TESTS=1 cargo test --workspace -- --ignored --nocapture
 ```
 
+CI (GitHub Actions) builds, tests, lints and checks formatting on Linux,
+macOS and Windows for pushes to `main` and `beta`, version tags and pull
+requests, and tests the release scripts. Run it on any other branch by hand
+with `gh workflow run CI --ref <branch>`.
+
+## Versions and releases
+
+Releases are automatic. Work flows feature branch → `beta` → `main`:
+
+| Merge into | Publishes | Example |
+| --- | --- | --- |
+| `beta` | a beta (GitHub pre-release) | `v0.2.0-beta.1`, then `v0.2.0-beta.2` |
+| `main` | a release (GitHub latest release) | `v0.2.0` |
+
+After CI passes on a push to either branch, the Release workflow
+([semantic-release](https://semantic-release.gitbook.io/)) reads the commit
+messages since the last release and picks the version:
+
+- `feat:` → minor (0.1.0 → 0.2.0)
+- `fix:` or `perf:` → patch (0.1.0 → 0.1.1)
+- a breaking change (`feat!:`, or a `BREAKING CHANGE:` footer) → minor while
+  hound is at 0.x
+- anything else (`docs:`, `test:`, `ci:`, `build:`, `chore:`, `refactor:`) →
+  no release
+
+It writes the version into `Cargo.toml`, `Cargo.lock` and `herdr-plugin.toml`
+(`scripts/set-version`), commits that as `chore(release): vX.Y.Z`, tags it
+`vX.Y.Z` and creates the GitHub release with notes from the commits. A test
+fails if `Cargo.toml` and `herdr-plugin.toml` disagree; `hound --version`
+prints the version. Nothing is published to crates.io.
+
+Rules for merging:
+
+- When squash-merging a pull request, its title becomes the commit message, so
+  it must follow the forms above.
+- Merge `beta` into `main` with a merge commit, not a squash.
+- After a release on `main`, the workflow merges `main` back into `beta` so the
+  next beta continues from it. If that merge conflicts, the workflow fails and
+  leaves `beta` unchanged: merge `main` into `beta` by hand and push.
+- The workflow pushes with GitHub's built-in token. If `main` or `beta` is
+  protected later, that token needs to be allowed to push.
+
+A version or a beta can be installed through herdr's plugin system by naming
+its tag (the plugin path has not yet been tried in a live session; see
+[Optional: herdr plugin](#optional-herdr-plugin)):
+
+```bash
+herdr plugin install enarsee/hound --ref v0.1.0
+```
+
 ## Status
 
 hound is young. The core — indexing, search, the popup, focusing and resuming

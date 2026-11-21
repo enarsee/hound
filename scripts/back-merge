@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# After a release on main, merges main into beta and pushes beta, so the next
+# beta release continues from the new version. Never force-pushes: on a merge
+# conflict (or if beta moved meanwhile) it fails and leaves beta as it was.
+# Usage: scripts/back-merge [remote]   (run from a checkout; default remote: origin)
+set -euo pipefail
+
+remote=${1:-origin}
+
+# ls-remote --exit-code: 2 means the remote answered and has no beta branch;
+# anything else non-zero (authentication, network) is a failure.
+status=0
+git ls-remote --exit-code --heads "$remote" beta > /dev/null || status=$?
+case $status in
+  0) ;;
+  2)
+    echo "back-merge: $remote has no beta branch; nothing to do"
+    exit 0
+    ;;
+  *)
+    echo "back-merge: cannot read $remote (git ls-remote exit $status)" >&2
+    exit 1
+    ;;
+esac
+
+git fetch -q "$remote" +refs/heads/main:refs/back-merge/main +refs/heads/beta:refs/back-merge/beta
+git checkout -q -B beta refs/back-merge/beta
+
+if ! git merge -q --no-edit -m "chore: merge main into beta" refs/back-merge/main; then
+  git merge --abort
+  echo "back-merge: merging main into beta conflicts; beta was left unchanged." >&2
+  echo "Merge main into beta by hand and push it." >&2
+  exit 1
+fi
+
+git push -q "$remote" beta
+echo "back-merge: beta now contains main"

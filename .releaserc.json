@@ -1,0 +1,31 @@
+{
+  "branches": ["main", { "name": "beta", "prerelease": true }],
+  "tagFormat": "v${version}",
+  "plugins": [
+    [
+      "@semantic-release/commit-analyzer",
+      {
+        "preset": "conventionalcommits",
+        "releaseRules": [
+          { "breaking": true, "release": "minor" },
+          { "type": "perf", "release": "patch" }
+        ]
+      }
+    ],
+    ["@semantic-release/release-notes-generator", { "preset": "conventionalcommits" }],
+    [
+      "@semantic-release/exec",
+      {
+        "prepareCmd": "scripts/set-version ${nextRelease.version} && cargo metadata --locked --format-version 1 > /dev/null"
+      }
+    ],
+    [
+      "@semantic-release/git",
+      {
+        "assets": ["Cargo.toml", "Cargo.lock", "herdr-plugin.toml"],
+        "message": "chore(release): v${nextRelease.version} [skip ci]"
+      }
+    ],
+    "@semantic-release/github"
+  ]
+}

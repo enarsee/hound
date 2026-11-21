@@ -1,0 +1,74 @@
+name: Release
+
+# Every green push to main publishes vX.Y.Z; every green push to beta publishes
+# vX.Y.Z-beta.N. semantic-release (.releaserc.json) picks the version from the
+# commit messages, writes it with scripts/set-version, commits, tags and
+# creates the GitHub release. A release on main is then merged back into beta.
+#
+# GitHub only runs workflow_run workflows from the default branch's copy of
+# this file. Pushes made here with the built-in token start no workflows, so
+# the release commit and the back-merge cannot trigger another release.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main, beta]
+
+permissions:
+  contents: write # release commit, tag, back-merge
+  issues: write # semantic-release comments on released issues
+  pull-requests: write # and on released pull requests
+
+# One queue for both branches: a main run's back-merge pushes beta, so it must
+# not overlap a beta release.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    # Only after CI passed on a push (never a pull request).
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The commit CI tested. If the branch has moved on since, semantic-
+          # release sees it is behind and skips; the newer commit's own green
+          # CI run releases it.
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+          # semantic-release authenticates with GITHUB_TOKEN itself.
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 26
+          cache: npm
+
+      # scripts/set-version checks Cargo.lock with cargo.
+      - name: Install toolchain
+        run: rustup toolchain install
+
+      - name: Install release tooling
+        run: npm ci --ignore-scripts
+
+      # Under workflow_run, GITHUB_REF names the default branch whatever branch
+      # CI ran on; semantic-release reads its branch from GITHUB_REF, so name
+      # the branch that was pushed, or a beta run would release as main.
+      - name: Release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+        run: GITHUB_REF="refs/heads/${HEAD_BRANCH}" npx semantic-release
+
+      - name: Merge main back into beta
+        if: github.event.workflow_run.head_branch == 'main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git"
+          scripts/back-merge origin
