@@ -1,0 +1,44 @@
+name: Release
+
+# A version tag (pushed by `cargo release … --execute`) becomes a GitHub
+# release with notes generated from the commits since the previous tag.
+on:
+  push:
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The tag must name the version that Cargo.toml and herdr-plugin.toml
+      # carry, or the release would describe a different build.
+      - name: Check the tag matches the version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          python3 - <<'EOF'
+          import os, sys, tomllib
+          tag = os.environ["TAG"]
+          want = tag.removeprefix("v")
+          with open("Cargo.toml", "rb") as f:
+              cargo = tomllib.load(f)["workspace"]["package"]["version"]
+          with open("herdr-plugin.toml", "rb") as f:
+              plugin = tomllib.load(f)["version"]
+          if cargo != want or plugin != want:
+              sys.exit(f"tag {tag} does not match Cargo.toml {cargo} / herdr-plugin.toml {plugin}")
+          print(f"{tag}: Cargo.toml and herdr-plugin.toml agree")
+          EOF
+
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: gh release create "$TAG" --verify-tag --generate-notes --title "hound $TAG"

@@ -1,8 +1,13 @@
 name: CI
 
+# Branches other than main run CI through a pull request or by hand:
+# `gh workflow run CI --ref <branch>`.
 on:
   push:
+    branches: [main]
+    tags: ['v*']
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read

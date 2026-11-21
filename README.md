@@ -535,6 +535,39 @@ is set, so `cargo test -- --include-ignored` alone stays off real data:
 HOUND_LIVE_TESTS=1 cargo test --workspace -- --ignored --nocapture
 ```
 
+CI (GitHub Actions) builds, tests, lints and checks formatting on Linux,
+macOS and Windows for pushes to `main`, version tags and pull requests. Run it
+on any other branch by hand with `gh workflow run CI --ref <branch>`.
+
+## Versions and releases
+
+hound follows semantic versioning while it is at 0.x: a minor release
+(0.2.0) brings features or breaking changes, a patch release (0.1.1) fixes.
+The version lives in `Cargo.toml` and is copied into `herdr-plugin.toml`; a
+test fails if the two differ. `hound --version` prints it.
+
+Releases are cut with [cargo-release](https://github.com/crate-ci/cargo-release)
+from a `main` whose CI is green:
+
+```bash
+cargo install cargo-release
+cargo release minor              # dry run: shows the version bump, commit and tag
+cargo release minor --execute    # commits "chore: release vX.Y.Z", tags vX.Y.Z, pushes
+```
+
+One commit updates both version copies, and one tag `vX.Y.Z` marks it.
+Nothing is published to crates.io. Pushing the tag creates a GitHub release
+whose notes list the commits since the previous tag; the release is refused if
+the tag does not match the version in both files.
+
+A fixed version can be installed through herdr's plugin system by naming the
+tag (the plugin path has not yet been tried in a live session; see
+[Optional: herdr plugin](#optional-herdr-plugin)):
+
+```bash
+herdr plugin install enarsee/hound --ref v0.1.0
+```
+
 ## Status
 
 hound is young. The core — indexing, search, the popup, focusing and resuming
