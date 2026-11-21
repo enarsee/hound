@@ -1,5 +1,5 @@
 //! The herdr plugin manifest carries its own copy of hound's version; a
-//! release (cargo-release) rewrites both. This keeps them from drifting.
+//! release (scripts/set-version) rewrites both. This keeps them from drifting.
 
 const MANIFEST: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),

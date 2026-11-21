@@ -18,7 +18,3 @@ httparse.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
-
-# cargo-release: the release tag is set on the hound crate only.
-[package.metadata.release]
-tag = false

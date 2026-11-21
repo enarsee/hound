@@ -32,10 +32,3 @@ interprocess = "2.4"
 [dev-dependencies]
 tempfile.workspace = true
 ureq.workspace = true
-
-# cargo-release: the herdr plugin manifest carries its own copy of the
-# version (tests/manifest.rs checks they match).
-[package.metadata.release]
-pre-release-replacements = [
-  { file = "../../herdr-plugin.toml", search = '(?m)^version = "[^"]+"', replace = 'version = "{{version}}"', exactly = 1 },
-]
