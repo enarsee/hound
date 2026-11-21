@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+publish = false
 
 [dependencies]
 anyhow.workspace = true
@@ -17,3 +18,7 @@ httparse.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+
+# cargo-release: the release tag is set on the hound crate only.
+[package.metadata.release]
+tag = false
